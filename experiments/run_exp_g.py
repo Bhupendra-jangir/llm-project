@@ -21,6 +21,7 @@ from src.traditional_metrics import compute_all_traditional_metrics
 from src.unified_score import (
     compute_unified_score, grid_search_weights, learned_combiner,
     grid_weight_oof_predictions, compare_all_metrics, DEFAULT_WEIGHTS,
+    merge_unified_score_inputs,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -45,34 +46,19 @@ def run_experiment_g(
         records, limit=limit, results_dir=res_dir,
         output_path=res_dir / "traditional_metrics.csv",
     )
-    combined = trad_df.copy()
-    if limit:
-        combined = combined.iloc[:limit]
-
     suffix = "_mock" if mock else ""
     geval_path = res_dir / f"geval_scores_full{suffix}.csv"
     if not geval_path.exists():
         raise FileNotFoundError(f"Run Experiment A before G; missing {geval_path}")
     geval_df = pd.read_csv(geval_path)
-    overall = geval_df[geval_df["dimension"] == "overall"][["doc_id", "system_id", "weighted_score"]]
-    overall = overall.rename(columns={"weighted_score": "geval_overall"})
-    combined = combined.merge(overall, on=["doc_id", "system_id"], how="left", validate="one_to_one")
 
     judge_path = res_dir / f"exp_c_judge_scores{suffix}.csv"
     if not judge_path.exists():
         raise FileNotFoundError(f"Run Experiment C before G; missing {judge_path}")
     judge_df = pd.read_csv(judge_path)
-    overall_j = judge_df[judge_df["dimension"] == "overall"].copy()
-    if overall_j["judge"].nunique() < 2:
-        raise ValueError("Ensemble agreement requires at least two distinct judge models")
-    judge_std = overall_j.groupby(["doc_id", "system_id"])["weighted_score"].std().reset_index()
-    judge_std.columns = ["doc_id", "system_id", "geval_judge_std"]
-    combined = combined.merge(
-        judge_std,
-        on=["doc_id", "system_id"],
-        how="left",
-        validate="one_to_one",
-    )
+    combined = merge_unified_score_inputs(trad_df, geval_df, judge_df)
+    if limit:
+        combined = combined.iloc[:limit]
 
     target_human = "human_overall"
 

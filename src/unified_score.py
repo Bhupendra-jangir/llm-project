@@ -48,6 +48,42 @@ DEFAULT_WEIGHTS = {
 }
 
 
+def merge_unified_score_inputs(
+    traditional_df: pd.DataFrame,
+    geval_df: pd.DataFrame,
+    judge_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Combine Exp B, A, and C outputs into the inputs required by unified scoring."""
+    merge_keys = ["doc_id", "system_id"]
+    overall_scores = geval_df.loc[
+        geval_df["dimension"] == "overall",
+        merge_keys + ["weighted_score"],
+    ].rename(columns={"weighted_score": "geval_overall"})
+
+    overall_judges = judge_df[judge_df["dimension"] == "overall"]
+    if overall_judges["judge"].nunique() < 2:
+        raise ValueError("Ensemble agreement requires at least two distinct judge models")
+    judge_std = (
+        overall_judges.groupby(merge_keys)["weighted_score"]
+        .std()
+        .rename("geval_judge_std")
+        .reset_index()
+    )
+
+    combined = traditional_df.merge(
+        overall_scores,
+        on=merge_keys,
+        how="left",
+        validate="one_to_one",
+    )
+    return combined.merge(
+        judge_std,
+        on=merge_keys,
+        how="left",
+        validate="one_to_one",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Component extraction
 # ---------------------------------------------------------------------------

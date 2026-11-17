@@ -112,14 +112,13 @@ def mock_banner():
 
 
 def _detect_results_dir() -> tuple[Path, bool]:
-    """Return the best available results directory and whether it's mock."""
-    # Prefer real results
+    """Prefer mock outputs for a safe layout preview."""
+    mock_path = MOCK_DIR / "correlations_mock.csv"
+    if mock_path.exists() or (MOCK_DIR / "traditional_metrics.csv").exists():
+        return MOCK_DIR, True
     real_path = RESULTS_DIR / "correlations.csv"
     if real_path.exists():
         return RESULTS_DIR, False
-    mock_path = MOCK_DIR / "correlations_mock.csv"
-    if mock_path.exists():
-        return MOCK_DIR, True
     return RESULTS_DIR, False
 
 
@@ -167,10 +166,8 @@ if page == "📊 Overview":
 
     # Load traditional metrics
     trad_df = load_results_df(str(res_dir / "traditional_metrics.csv"))
-    if trad_df is None:
-        trad_df = load_results_df(str(RESULTS_DIR / "traditional_metrics.csv"))
 
-    if trad_df is not None:
+    if trad_df is not None and not trad_df.empty:
         st.subheader("System Rankings by Metric")
         col1, col2 = st.columns([1, 2])
 
@@ -302,7 +299,7 @@ elif page == "⚖️ Bias Analysis":
             bias_data = json.load(f)
 
         if not bias_data:
-            st.warning("No bias data found.")
+            st.info("No bias analysis data is available yet. Run `make smoke` to generate mock results.")
         else:
             metric_names = [b["metric"] for b in bias_data]
             selected = st.selectbox("Select metric", metric_names)
@@ -358,14 +355,28 @@ elif page == "🎛️ Unified Score / Human Alignment":
         total = w_geval + w_bert + w_rouge + w_ens
 
         if abs(total - 1.0) > 0.01:
-            st.warning(f"⚠️ Weights sum to {total:.2f} (should be 1.0). Will be normalized.")
+            st.warning(f"Weights sum to {total:.2f} (should be 1.0). Will be normalized.")
 
     with col2:
-        trad_df = load_results_df(str(res_dir / "traditional_metrics.csv"))
-        if trad_df is None:
-            trad_df = load_results_df(str(RESULTS_DIR / "traditional_metrics.csv"))
+        suffix = "_mock" if is_mock else ""
+        unified_path = res_dir / f"exp_g_scores{suffix}.csv"
+        unified_df = load_results_df(str(unified_path))
 
-        if trad_df is not None:
+        required_columns = {
+            "geval_overall",
+            "geval_judge_std",
+            "bertscore_F1_ref",
+            "rouge1_ref",
+        }
+        missing_columns = required_columns - set(unified_df.columns) if unified_df is not None else set()
+        if unified_df is None:
+            st.info("Unified-score inputs are not available yet. Run `make smoke` to generate mock results.")
+        elif missing_columns:
+            st.info(
+                "Unified-score inputs are incomplete "
+                f"({', '.join(sorted(missing_columns))}). Run `make smoke` to regenerate mock results."
+            )
+        else:
             try:
                 from src.unified_score import compute_unified_score
                 from src.utils import summary_level_correlation
@@ -376,9 +387,9 @@ elif page == "🎛️ Unified Score / Human Alignment":
                     "rouge": w_rouge / total if total > 0 else 0.25,
                     "ensemble_agreement": w_ens / total if total > 0 else 0.25,
                 }
-                scores = compute_unified_score(trad_df, weights=weights)
-                human = trad_df["human_overall"].values.astype(float) if "human_overall" in trad_df.columns else np.zeros(len(trad_df))
-                doc_ids = trad_df["doc_id"].values
+                scores = compute_unified_score(unified_df, weights=weights)
+                human = unified_df["human_overall"].values.astype(float) if "human_overall" in unified_df.columns else np.zeros(len(unified_df))
+                doc_ids = unified_df["doc_id"].values
 
                 valid = ~(np.isnan(scores) | np.isnan(human))
                 corr = summary_level_correlation(scores[valid], human[valid], doc_ids[valid])
@@ -386,10 +397,10 @@ elif page == "🎛️ Unified Score / Human Alignment":
                 st.metric("Summary-Level Spearman ρ", f"{corr['spearman']:.4f}")
                 st.metric("Summary-Level Kendall τ", f"{corr['kendall']:.4f}")
                 st.caption("Based on SummEval human overall scores.")
+            except ValueError as e:
+                st.info(f"Unified score is unavailable for these data: {e}")
             except Exception as e:
                 st.error(f"Error computing unified score: {e}")
-        else:
-            st.info("Run `python experiments/run_exp_b.py` first.")
 
     # Show best grid weights if available
     suffix = "_mock" if is_mock else ""
@@ -417,6 +428,8 @@ elif page == "🎛️ Unified Score / Human Alignment":
 # ═══════════════════════════════════════════════════════════════
 elif page == "🗂️ Data":
     st.title("🗂️ SummEval Data Inspector")
+    if is_mock:
+        mock_banner()
 
     try:
         from src.utils import load_summeval
@@ -464,6 +477,8 @@ elif page == "🗂️ Data":
                                "bertscore_F1_ref", "bertscore_F1_src"]
                 disp = {c: round(row[c], 4) for c in metric_cols if c in row.index}
                 st.json(disp)
+        else:
+            st.info("Automatic metric scores are not available yet. Run `make smoke` to generate mock results.")
 
     except FileNotFoundError:
         st.info("SummEval data not found. Ensure data/summeval.json exists.")
@@ -477,9 +492,7 @@ elif page == "📏 Traditional Metrics":
     if is_mock:
         mock_banner()
     trad_df = load_results_df(str(res_dir / "traditional_metrics.csv"))
-    if trad_df is None and is_mock:
-        trad_df = load_results_df(str(RESULTS_DIR / "traditional_metrics.csv"))
-    if trad_df is None:
+    if trad_df is None or trad_df.empty:
         st.info("Run `python experiments/run_exp_b.py` to calculate ROUGE, BLEU and BERTScore.")
     else:
         st.dataframe(trad_df.head(100), use_container_width=True)
@@ -494,7 +507,7 @@ elif page == "🏆 Model Rankings":
         mock_banner()
     ranking_path = res_dir / f"exp_c_system_rankings{'_mock' if is_mock else ''}.csv"
     ranking_df = load_results_df(str(ranking_path))
-    if ranking_df is not None:
+    if ranking_df is not None and not ranking_df.empty:
         judge = st.selectbox("Judge", sorted(ranking_df["judge"].dropna().unique()))
         st.dataframe(
             ranking_df[ranking_df["judge"] == judge].sort_values("judge_rank"),

@@ -17,6 +17,7 @@ from src.unified_score import (
     grid_search_weights,
     grid_weight_oof_predictions,
     learned_combiner,
+    merge_unified_score_inputs,
     _scale_fold,
 )
 from sklearn.model_selection import GroupKFold
@@ -62,6 +63,33 @@ class TestUnifiedScore:
     def test_missing_ensemble_agreement_is_not_defaulted(self, sample_df):
         with pytest.raises(ValueError, match="required metric columns"):
             extract_components(sample_df.drop(columns="geval_judge_std"))
+
+    def test_exp_a_and_c_outputs_supply_unified_score_columns(self):
+        traditional = pd.DataFrame({
+            "doc_id": ["d1", "d2"],
+            "system_id": ["s1", "s1"],
+            "bertscore_F1_ref": [0.8, 0.9],
+            "rouge1_ref": [0.3, 0.4],
+        })
+        geval = pd.DataFrame({
+            "doc_id": ["d1", "d2", "d1"],
+            "system_id": ["s1", "s1", "s1"],
+            "dimension": ["overall", "overall", "coherence"],
+            "weighted_score": [3.0, 4.0, 2.0],
+        })
+        judges = pd.DataFrame({
+            "doc_id": ["d1", "d1", "d2", "d2"],
+            "system_id": ["s1"] * 4,
+            "dimension": ["overall"] * 4,
+            "weighted_score": [2.0, 4.0, 3.0, 5.0],
+            "judge": ["judge-a", "judge-b", "judge-a", "judge-b"],
+        })
+
+        combined = merge_unified_score_inputs(traditional, geval, judges)
+
+        assert combined["geval_overall"].tolist() == [3.0, 4.0]
+        np.testing.assert_allclose(combined["geval_judge_std"], [np.sqrt(2), np.sqrt(2)])
+        assert np.isfinite(compute_unified_score(combined)).all()
 
     def test_fold_scaling_uses_training_bounds_only(self):
         train = np.array([[1.0], [3.0]])
