@@ -62,6 +62,10 @@ def run_experiment_f(
             dim_scores = dim_scores.rename(columns={"weighted_score": f"geval_{dim}"})
             combined = combined.merge(dim_scores, on=["doc_id", "system_id"], how="left")
 
+    judge_path = res_dir / f"exp_c_judge_scores{'_mock' if mock else ''}.csv"
+    judge_scores = pd.read_csv(judge_path) if judge_path.exists() else None
+    judge_families = cfg.get("bias_analysis", {}).get("judge_families", {})
+
     metric_human_pairs = [
         ("rouge1_ref", "relevance"),
         ("bertscore_F1_ref", "consistency"),
@@ -80,6 +84,7 @@ def run_experiment_f(
             df=combined, metric_col=metric_col,
             human_col=f"human_{human_dim}", metric_name=metric_col,
             results_dir=res_dir, is_mock=mock,
+            judge_scores=judge_scores, judge_families=judge_families,
         )
         all_results.append(result)
 
@@ -93,5 +98,11 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--results-dir", type=Path, default=None)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    run_experiment_f(limit=args.limit, mock=args.mock, results_dir=args.results_dir)
+    run_experiment_f(
+        limit=args.limit,
+        mock=args.mock,
+        results_dir=args.results_dir,
+        seed=args.seed,
+    )

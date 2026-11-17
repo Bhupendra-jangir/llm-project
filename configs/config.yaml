@@ -76,6 +76,9 @@ human_validation:
     - system_id
     - score_quartile
 
+bias_analysis:
+  judge_families: {}
+
 unified_score:
   default_weights:
     geval: 0.40

@@ -20,13 +20,16 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 from scipy import stats
+from sklearn.metrics import cohen_kappa_score
 
 from src.utils import (
     PROJECT_ROOT,
     DIMENSIONS,
+    HUMAN_DIMENSIONS,
     ensure_results_dir,
     records_to_dataframe,
     save_results,
+    summary_level_correlation,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,7 +49,7 @@ def create_stratified_subset(
 ) -> pd.DataFrame:
     """Create a stratified subset for human validation.
 
-    Stratifies by system_id and human overall score tertile to ensure
+    Stratifies by system_id and human overall score quartile to ensure
     balanced coverage.
 
     Args:
@@ -57,34 +60,53 @@ def create_stratified_subset(
     Returns:
         Stratified subset DataFrame.
     """
+    if not 0 < n_samples <= len(df):
+        raise ValueError(f"n_samples must be between 1 and {len(df)}")
     rng = np.random.default_rng(seed)
-    df = df.copy()
-
-    # Create tertile bins of human overall score
-    df["overall_tertile"] = pd.qcut(
-        df["human_overall"], q=3, labels=["low", "mid", "high"]
+    sampled_df = df.reset_index(drop=True).copy()
+    sampled_df["score_quartile"] = (
+        pd.qcut(
+            sampled_df["human_overall"].rank(method="first"),
+            q=4,
+            labels=False,
+        )
+        + 1
     )
-    df["stratum"] = df["system_id"].astype(str) + "_" + df["overall_tertile"].astype(str)
+    grouped = {
+        key: group.index.to_numpy()
+        for key, group in sampled_df.groupby(["system_id", "score_quartile"], sort=True)
+    }
+    sizes = {key: len(indices) for key, indices in grouped.items()}
+    base_count, _ = divmod(n_samples, len(grouped))
+    allocations = {
+        key: min(base_count, size) for key, size in sizes.items()
+    }
+    remaining = n_samples - sum(allocations.values())
+    priority = list(grouped)
+    rng.shuffle(priority)
+    while remaining:
+        progressed = False
+        for key in priority:
+            if allocations[key] < sizes[key]:
+                allocations[key] += 1
+                remaining -= 1
+                progressed = True
+                if remaining == 0:
+                    break
+        if not progressed:
+            raise RuntimeError("Unable to allocate the requested stratified sample")
 
-    # Sample proportionally from each stratum
-    strata = df["stratum"].unique()
-    n_per_stratum = max(1, n_samples // len(strata))
-    sampled = []
-    for stratum in strata:
-        stratum_df = df[df["stratum"] == stratum]
-        k = min(n_per_stratum, len(stratum_df))
-        idx = rng.choice(len(stratum_df), size=k, replace=False)
-        sampled.append(stratum_df.iloc[idx])
-
-    subset = pd.concat(sampled, ignore_index=True)
-    # Top up if short
-    if len(subset) < n_samples:
-        remaining = df[~df.index.isin(subset.index)]
-        extra_idx = rng.choice(len(remaining), size=n_samples - len(subset), replace=False)
-        subset = pd.concat([subset, remaining.iloc[extra_idx]], ignore_index=True)
-
-    subset = subset.sample(frac=1, random_state=seed).reset_index(drop=True)
-    return subset.drop(columns=["stratum", "overall_tertile"], errors="ignore")
+    selected_indices = []
+    for key, indices in grouped.items():
+        count = allocations[key]
+        if count:
+            selected_indices.extend(rng.choice(indices, size=count, replace=False))
+    return (
+        sampled_df.loc[selected_indices]
+        .sample(frac=1, random_state=seed)
+        .drop(columns="score_quartile")
+        .reset_index(drop=True)
+    )
 
 
 def export_rating_template(
@@ -152,17 +174,7 @@ def compute_inter_rater_agreement(
     required = ["doc_id", "system_id"] + [f"rated_{d}" for d in DIMENSIONS]
     missing = [c for c in required if c not in my_ratings.columns]
     if missing:
-        logger.warning(f"Human ratings file missing columns: {missing}")
-        return None
-
-    # Drop unrated rows
-    for d in DIMENSIONS:
-        my_ratings = my_ratings[pd.notna(my_ratings[f"rated_{d}"])]
-        my_ratings = my_ratings[my_ratings[f"rated_{d}"] != ""]
-
-    if len(my_ratings) == 0:
-        logger.warning("No completed ratings found in human_ratings.csv")
-        return None
+        raise ValueError(f"Human ratings file missing columns: {missing}")
 
     # Merge with SummEval expert scores
     merged = my_ratings.merge(
@@ -176,48 +188,57 @@ def compute_inter_rater_agreement(
         return None
 
     results: Dict[str, Any] = {
-        "n_records": len(merged),
+        "n_records": 0,
         "dimensions": {},
     }
 
     for dim in DIMENSIONS:
         my_col = f"rated_{dim}"
         expert_col = f"human_{dim}"
-        my_scores = pd.to_numeric(merged[my_col], errors="coerce").dropna()
-        expert_scores = pd.to_numeric(merged[expert_col], errors="coerce").dropna()
-
-        # Align
-        common_idx = my_scores.index.intersection(expert_scores.index)
-        my_scores = my_scores[common_idx].values
-        expert_scores = expert_scores[common_idx].values
+        my_scores = pd.to_numeric(merged[my_col], errors="coerce")
+        expert_scores = pd.to_numeric(merged[expert_col], errors="coerce")
+        valid = my_scores.between(1, 5) & expert_scores.notna()
+        my_scores = my_scores[valid].to_numpy(dtype=float)
+        expert_scores = expert_scores[valid].to_numpy(dtype=float)
 
         if len(my_scores) < 3:
-            results["dimensions"][dim] = {"spearman": float("nan"), "alpha": float("nan"), "n": len(my_scores)}
+            results["dimensions"][dim] = {
+                "spearman": float("nan"),
+                "cohen_kappa": float("nan"),
+                "weighted_cohen_kappa": float("nan"),
+                "krippendorff_alpha": float("nan"),
+                "n": len(my_scores),
+            }
             continue
 
         spearman_r, spearman_p = stats.spearmanr(my_scores, expert_scores)
+        rated_categories = np.rint(my_scores).astype(int)
+        expert_categories = np.rint(expert_scores).astype(int)
+        cohen_kappa = cohen_kappa_score(rated_categories, expert_categories)
+        weighted_kappa = cohen_kappa_score(
+            rated_categories,
+            expert_categories,
+            weights="linear",
+        )
+        import krippendorff
 
-        # Krippendorff alpha
-        try:
-            import krippendorff
-            # Format: (n_raters, n_items)
-            data = np.array([my_scores, expert_scores])
-            alpha = krippendorff.alpha(data, level_of_measurement="ordinal")
-        except ImportError:
-            logger.warning("krippendorff package not installed; skipping alpha computation.")
-            alpha = float("nan")
-        except Exception as e:
-            logger.warning(f"Krippendorff alpha failed for {dim}: {e}")
-            alpha = float("nan")
+        alpha = krippendorff.alpha(
+            np.array([rated_categories, expert_categories]),
+            level_of_measurement="ordinal",
+        )
+        results["n_records"] = max(results["n_records"], len(my_scores))
 
         results["dimensions"][dim] = {
             "spearman": float(spearman_r),
             "spearman_p": float(spearman_p),
+            "cohen_kappa": float(cohen_kappa),
+            "weighted_cohen_kappa": float(weighted_kappa),
             "krippendorff_alpha": float(alpha),
             "n": int(len(my_scores)),
         }
         logger.info(
             f"  {dim}: Spearman={spearman_r:.3f} (p={spearman_p:.4f}), "
+            f"Cohen kappa={cohen_kappa:.3f}, weighted kappa={weighted_kappa:.3f}, "
             f"Krippendorff alpha={alpha:.3f}, n={len(my_scores)}"
         )
 
@@ -230,6 +251,9 @@ def run_experiment_d(
     seed: int = 42,
     results_dir: Optional[Path] = None,
     human_ratings_path: Optional[Path] = None,
+    automatic_metrics: Optional[pd.DataFrame] = None,
+    rating_sheet_path: Optional[Path] = None,
+    data_label: str = "REAL DATA",
 ) -> Dict[str, Any]:
     """Run Experiment D: human validation subset and inter-rater agreement.
 
@@ -245,23 +269,99 @@ def run_experiment_d(
     """
     df = records_to_dataframe(records)
     subset = create_stratified_subset(df, n_samples=n_samples, seed=seed)
-    template_path = export_rating_template(subset)
+    template_path = export_rating_template(subset, output_path=rating_sheet_path)
 
     agreement = compute_inter_rater_agreement(df, human_ratings_path=human_ratings_path)
+
+    alignment = None
+    if automatic_metrics is not None:
+        alignment = compute_metric_alignment(automatic_metrics, df)
+        alignment["data_label"] = data_label
 
     output = {
         "subset_size": len(subset),
         "template_path": str(template_path),
         "inter_rater_agreement": agreement,
+        "automatic_metric_alignment": (
+            alignment.to_dict(orient="records") if alignment is not None else None
+        ),
+        "human_reference": (
+            "new human ratings compared with SummEval expert annotations"
+            if agreement is not None
+            else "SummEval expert annotations only; no new human ratings were present"
+        ),
+        "data_label": data_label,
     }
 
-    # Save agreement report
-    if results_dir and agreement:
+    if results_dir:
         ensure_results_dir(results_dir)
-        agreement_path = results_dir / "inter_rater_agreement.json"
+        agreement_path = results_dir / "exp_d_human_alignment.json"
         import json
-        with open(agreement_path, "w") as f:
-            json.dump(agreement, f, indent=2)
-        logger.info(f"Inter-rater agreement saved to {agreement_path}")
+        with agreement_path.open("w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2, default=str)
+        logger.info(f"Human alignment report saved to {agreement_path}")
+        if alignment is not None:
+            save_results(alignment, results_dir / "exp_d_metric_alignment.csv")
 
     return output
+
+
+def compute_metric_alignment(
+    automatic_metrics: pd.DataFrame,
+    expert_scores: pd.DataFrame,
+) -> pd.DataFrame:
+    """Correlate available automatic metric columns with SummEval expert scores."""
+    nonhuman_metrics = automatic_metrics.drop(
+        columns=[column for column in automatic_metrics if column.startswith("human_")],
+        errors="ignore",
+    )
+    merged = nonhuman_metrics.merge(
+        expert_scores[
+            ["doc_id", "system_id", *[f"human_{dim}" for dim in HUMAN_DIMENSIONS]]
+        ],
+        on=["doc_id", "system_id"],
+        how="inner",
+        suffixes=("", "_expert"),
+    )
+    metric_columns = [
+        column
+        for column in automatic_metrics.columns
+        if column not in {"doc_id", "system_id", "bertscore_model"}
+        and not column.startswith("human_")
+        and pd.api.types.is_numeric_dtype(automatic_metrics[column])
+    ]
+    rows = []
+    for metric_col in metric_columns:
+        for dimension in HUMAN_DIMENSIONS:
+            human_col = f"human_{dimension}"
+            valid = merged[[metric_col, human_col]].notna().all(axis=1)
+            if valid.sum() < 3:
+                continue
+            pred = merged.loc[valid, metric_col].to_numpy(dtype=float)
+            human = merged.loc[valid, human_col].to_numpy(dtype=float)
+            docs = merged.loc[valid, "doc_id"].to_numpy()
+            summary_corr = summary_level_correlation(pred, human, docs)
+            system_pred = merged.loc[valid].groupby("system_id")[metric_col].mean()
+            system_human = merged.loc[valid].groupby("system_id")[human_col].mean()
+            rows.append(
+                {
+                    "metric": metric_col,
+                    "human_dim": dimension,
+                    "summary_spearman": summary_corr["spearman"],
+                    "summary_pearson": summary_corr["pearson"],
+                    "summary_kendall": summary_corr["kendall"],
+                    "pooled_spearman": float(stats.spearmanr(pred, human).statistic),
+                    "pooled_pearson": float(stats.pearsonr(pred, human).statistic),
+                    "pooled_kendall": float(stats.kendalltau(pred, human).statistic),
+                    "system_spearman": float(
+                        stats.spearmanr(system_pred, system_human).statistic
+                    ),
+                    "system_pearson": float(
+                        stats.pearsonr(system_pred, system_human).statistic
+                    ),
+                    "system_kendall": float(
+                        stats.kendalltau(system_pred, system_human).statistic
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)

@@ -201,7 +201,137 @@ def compute_system_type_bias(
             "std": float(np.std(res, ddof=1)) if len(res) > 1 else float("nan"),
             "n": int(len(res)),
         })
+    types = sorted(sub["system_type"].unique())
+    if len(types) == 2:
+        first = sub.loc[sub["system_type"] == types[0], "residual"].to_numpy()
+        second = sub.loc[sub["system_type"] == types[1], "residual"].to_numpy()
+        test = stats.ttest_ind(first, second, equal_var=False)
+        pooled_sd = np.sqrt(
+            ((len(first) - 1) * np.var(first, ddof=1) + (len(second) - 1) * np.var(second, ddof=1))
+            / (len(first) + len(second) - 2)
+        )
+        effect = (float(np.mean(first)) - float(np.mean(second))) / pooled_sd if pooled_sd else float("nan")
+        for row in rows:
+            row["comparison_p_value"] = float(test.pvalue)
+            row["cohen_d"] = effect
     return pd.DataFrame(rows)
+
+
+def compute_system_score_distribution(
+    df: pd.DataFrame,
+    metric_col: str,
+    human_col: str,
+) -> Dict[str, Any]:
+    """Summarize metric and residual distributions by system."""
+    sub = df[[metric_col, human_col, "system_id"]].dropna().copy()
+    sub["residual"] = (
+        z_score_normalize(sub[metric_col].to_numpy(dtype=float))
+        - z_score_normalize(sub[human_col].to_numpy(dtype=float))
+    )
+    per_system = (
+        sub.groupby("system_id")
+        .agg(
+            mean_score=(metric_col, "mean"),
+            std_score=(metric_col, "std"),
+            median_score=(metric_col, "median"),
+            q25_score=(metric_col, lambda values: values.quantile(0.25)),
+            q75_score=(metric_col, lambda values: values.quantile(0.75)),
+            mean_residual=("residual", "mean"),
+            n=("residual", "size"),
+        )
+        .reset_index()
+    )
+    residual_groups = [
+        group["residual"].to_numpy()
+        for _, group in sub.groupby("system_id")
+    ]
+    if len(residual_groups) > 1:
+        test = stats.f_oneway(*residual_groups)
+        between = sum(
+            len(group) * (np.mean(group) - sub["residual"].mean()) ** 2
+            for group in residual_groups
+        )
+        total = np.sum((sub["residual"] - sub["residual"].mean()) ** 2)
+        eta_squared = float(between / total) if total else float("nan")
+        significance = float(test.pvalue)
+    else:
+        eta_squared = float("nan")
+        significance = float("nan")
+    return {
+        "per_system": per_system.to_dict(orient="records"),
+        "residual_anova_p_value": significance,
+        "residual_eta_squared": eta_squared,
+    }
+
+
+def compute_self_preference_bias(
+    judge_scores: pd.DataFrame | None,
+    human_df: pd.DataFrame,
+    system_families: Dict[str, str],
+    judge_families: Dict[str, str],
+    human_dim: str,
+) -> Dict[str, Any]:
+    """Compare same-family and other-family judge residuals when metadata exists."""
+    if judge_scores is None or not system_families or not judge_families:
+        return {
+            "available": False,
+            "reason": "Verified judge and system-family mappings are required.",
+            "comparisons": [],
+        }
+    required = {"judge", "system_id", "weighted_score"}
+    if not required.issubset(judge_scores.columns):
+        raise ValueError(f"Judge scores are missing columns: {sorted(required - set(judge_scores.columns))}")
+    dimension_scores = judge_scores
+    if "dimension" in dimension_scores.columns:
+        dimension_scores = dimension_scores[dimension_scores["dimension"] == human_dim]
+    merged = dimension_scores.merge(
+        human_df[["doc_id", "system_id", f"human_{human_dim}"]],
+        on=["doc_id", "system_id"],
+        how="inner",
+        validate="many_to_one",
+    )
+    merged["system_family"] = merged["system_id"].map(system_families)
+    merged["judge_family"] = merged["judge"].map(judge_families)
+    merged = merged.dropna(subset=["system_family", "judge_family", "weighted_score", f"human_{human_dim}"])
+    merged["residual"] = (
+        z_score_normalize(merged["weighted_score"].to_numpy(dtype=float))
+        - z_score_normalize(merged[f"human_{human_dim}"].to_numpy(dtype=float))
+    )
+    comparisons = []
+    for judge, group in merged.groupby("judge"):
+        same = group.loc[group["system_family"] == group["judge_family"], "residual"].to_numpy()
+        other = group.loc[group["system_family"] != group["judge_family"], "residual"].to_numpy()
+        if len(same) < 2 or len(other) < 2:
+            continue
+        test = stats.ttest_ind(same, other, equal_var=False)
+        pooled_sd = np.sqrt(
+            ((len(same) - 1) * np.var(same, ddof=1) + (len(other) - 1) * np.var(other, ddof=1))
+            / (len(same) + len(other) - 2)
+        )
+        comparisons.append(
+            {
+                "judge": judge,
+                "judge_family": group["judge_family"].iloc[0],
+                "same_family_mean_residual": float(np.mean(same)),
+                "other_family_mean_residual": float(np.mean(other)),
+                "cohen_d": float((np.mean(same) - np.mean(other)) / pooled_sd) if pooled_sd else float("nan"),
+                "p_value": float(test.pvalue),
+                "n_same_family": len(same),
+                "n_other_family": len(other),
+            }
+        )
+    return {"available": bool(comparisons), "reason": None, "comparisons": comparisons}
+
+
+def compute_position_effect() -> Dict[str, Any]:
+    """Position effects cannot be estimated without randomized-order score records."""
+    return {
+        "available": False,
+        "reason": (
+            "SummEval scores each summary independently and contains no randomized "
+            "presentation-order metadata."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +409,8 @@ def run_bias_analysis(
     metric_name: str,
     results_dir: Path,
     is_mock: bool = False,
+    judge_scores: pd.DataFrame | None = None,
+    judge_families: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Run all five bias analyses for one metric-human dimension pair."""
     ensure_results_dir(results_dir)
@@ -287,6 +419,7 @@ def run_bias_analysis(
     results: Dict[str, Any] = {
         "metric": metric_name,
         "human_dim": human_col,
+        "data_label": "MOCK DATA" if is_mock else "REAL DATA",
     }
 
     # 1. Per-system bias
@@ -298,21 +431,42 @@ def run_bias_analysis(
         is_mock=is_mock,
     )
 
-    # 2. Length bias
+    # 2. Length bias, controlling for the human score
     if "system_output" in df.columns:
         length_bias = compute_length_bias(df, metric_col, human_col)
         results["length_bias"] = length_bias
+    else:
+        results["length_bias"] = {"available": False, "reason": "Summary text is unavailable."}
 
-    # 3. Extractiveness bias
-    if "system_output" in df.columns and "source" in df.columns:
-        ext_bias = compute_extractiveness_bias(df, metric_col, human_col)
-        results["extractiveness_bias"] = ext_bias
+    # 3. Position effect
+    results["position_effect"] = compute_position_effect()
 
-    # 4. System type bias
+    # 4. Score distribution and family bias
+    results["system_score_distribution"] = compute_system_score_distribution(
+        df, metric_col, human_col
+    )
     stype_bias = compute_system_type_bias(df, metric_col, human_col)
     results["system_type_bias"] = stype_bias.to_dict(orient="records")
+    results["self_preference_bias"] = compute_self_preference_bias(
+        judge_scores=judge_scores,
+        human_df=df,
+        system_families=SYSTEM_TYPE_LABELS,
+        judge_families=judge_families or {},
+        human_dim=human_col.removeprefix("human_"),
+    )
 
-    # 5. Residual distribution plot
+    # 5. Extractiveness/style bias, controlling for the human score
+    if "system_output" in df.columns and "source" in df.columns:
+        results["extractiveness_bias"] = compute_extractiveness_bias(
+            df, metric_col, human_col
+        )
+    else:
+        results["extractiveness_bias"] = {
+            "available": False,
+            "reason": "Summary text or source article is unavailable.",
+        }
+
+    # Visualize residual score differences.
     plot_residual_distribution(
         df, metric_col, human_col,
         results_dir / "figures" / f"residual_{metric_name}_{human_col}.png",

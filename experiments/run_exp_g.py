@@ -20,7 +20,7 @@ from src.utils import (
 from src.traditional_metrics import compute_all_traditional_metrics
 from src.unified_score import (
     compute_unified_score, grid_search_weights, learned_combiner,
-    compare_all_metrics, DEFAULT_WEIGHTS,
+    grid_weight_oof_predictions, compare_all_metrics, DEFAULT_WEIGHTS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,41 +51,69 @@ def run_experiment_g(
 
     suffix = "_mock" if mock else ""
     geval_path = res_dir / f"geval_scores_full{suffix}.csv"
-    if geval_path.exists():
-        geval_df = pd.read_csv(geval_path)
-        overall = geval_df[geval_df["dimension"] == "overall"][["doc_id", "system_id", "weighted_score"]]
-        overall = overall.rename(columns={"weighted_score": "geval_overall"})
-        combined = combined.merge(overall, on=["doc_id", "system_id"], how="left")
+    if not geval_path.exists():
+        raise FileNotFoundError(f"Run Experiment A before G; missing {geval_path}")
+    geval_df = pd.read_csv(geval_path)
+    overall = geval_df[geval_df["dimension"] == "overall"][["doc_id", "system_id", "weighted_score"]]
+    overall = overall.rename(columns={"weighted_score": "geval_overall"})
+    combined = combined.merge(overall, on=["doc_id", "system_id"], how="left", validate="one_to_one")
 
-        judge_path = res_dir / f"exp_c_judge_scores{suffix}.csv"
-        if judge_path.exists():
-            judge_df = pd.read_csv(judge_path)
-            overall_j = judge_df[judge_df["dimension"] == "overall"].copy()
-            judge_std = overall_j.groupby(["doc_id", "system_id"])["weighted_score"].std().reset_index()
-            judge_std.columns = ["doc_id", "system_id", "geval_judge_std"]
-            combined = combined.merge(judge_std, on=["doc_id", "system_id"], how="left")
+    judge_path = res_dir / f"exp_c_judge_scores{suffix}.csv"
+    if not judge_path.exists():
+        raise FileNotFoundError(f"Run Experiment C before G; missing {judge_path}")
+    judge_df = pd.read_csv(judge_path)
+    overall_j = judge_df[judge_df["dimension"] == "overall"].copy()
+    if overall_j["judge"].nunique() < 2:
+        raise ValueError("Ensemble agreement requires at least two distinct judge models")
+    judge_std = overall_j.groupby(["doc_id", "system_id"])["weighted_score"].std().reset_index()
+    judge_std.columns = ["doc_id", "system_id", "geval_judge_std"]
+    combined = combined.merge(
+        judge_std,
+        on=["doc_id", "system_id"],
+        how="left",
+        validate="one_to_one",
+    )
 
     target_human = "human_overall"
 
     # (a) Fixed weights
-    combined["unified_fixed"] = compute_unified_score(combined, weights=DEFAULT_WEIGHTS)
+    default_weights = cfg.get("unified_score", {}).get("default_weights", DEFAULT_WEIGHTS)
+    combined["unified_fixed"] = compute_unified_score(combined, weights=default_weights)
 
     # (b) Grid search
     step = cfg.get("unified_score", {}).get("grid_search_step", 0.05)
     logger.info(f"Running weight grid search (step={step})...")
-    grid_results = grid_search_weights(combined, human_col=target_human, step=step)
+    cv_folds = cfg.get("unified_score", {}).get("learned_combiner", {}).get("cv_folds", 5)
+    grid_results = grid_search_weights(
+        combined,
+        human_col=target_human,
+        step=step,
+        n_folds=cv_folds,
+        seed=seed,
+    )
+    grid_results["data_label"] = "MOCK DATA" if mock else "REAL DATA"
     best = grid_results.iloc[0]
     logger.info(f"Best grid weights: {best.to_dict()}")
     save_results(grid_results.head(100), res_dir / f"exp_g_grid_search{suffix}.csv")
 
     best_w = {"geval": best.w_geval, "bertscore": best.w_bertscore,
                "rouge": best.w_rouge, "ensemble_agreement": best.w_ensemble}
-    combined["unified_grid"] = compute_unified_score(combined, weights=best_w)
+    combined["unified_grid"] = grid_weight_oof_predictions(
+        combined,
+        weights=best_w,
+        human_col=target_human,
+        n_folds=cv_folds,
+    )
 
     # (c) Ridge regression
-    ridge_result = learned_combiner(combined, human_col=target_human, seed=seed)
+    ridge_result = learned_combiner(
+        combined,
+        human_col=target_human,
+        seed=seed,
+        n_folds=cv_folds,
+    )
     oof = ridge_result["oof_predictions"]
-    combined["unified_ridge"] = np.array(oof[:len(combined)], dtype=float)
+    combined["unified_ridge"] = np.asarray(oof, dtype=float)
 
     metric_cols = ["rouge1_ref", "rouge2_ref", "bertscore_F1_ref", "bleu_ref",
                    "unified_fixed", "unified_grid", "unified_ridge"]
@@ -96,7 +124,10 @@ def run_experiment_g(
         combined, human_col=target_human, metric_cols=metric_cols,
         unified_col="unified_fixed", seed=seed,
     )
+    comparison["data_label"] = "MOCK DATA" if mock else "REAL DATA"
+    combined["data_label"] = "MOCK DATA" if mock else "REAL DATA"
     save_results(comparison, res_dir / f"exp_g_comparison{suffix}.csv")
+    save_results(combined, res_dir / f"exp_g_scores{suffix}.csv")
 
     print("\n=== Experiment G: Unified Score Comparison ===")
     display_cols = ["metric", "summary_spearman", "summary_spearman_ci_lo",
