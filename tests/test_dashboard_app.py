@@ -23,7 +23,8 @@ def test_all_dashboard_pages_render_with_mock_data():
         app.sidebar.radio[0].set_value(page).run()
         assert not app.exception, f"{page} raised an exception"
         assert not app.error, f"{page} rendered a red error"
-        assert any("MOCK DATA" in element.value for element in app.markdown)
+        assert not any("MockLLMClient" in element.value for element in app.markdown)
+        assert any("_mock/" in caption.value for caption in app.sidebar.caption)
 
         if page == "🎛️ Unified Score / Human Alignment":
             weights = [element.value for element in app.slider]

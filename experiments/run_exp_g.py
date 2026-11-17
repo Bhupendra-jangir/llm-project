@@ -133,7 +133,7 @@ def run_experiment_g(
     print(f"Best individual metric Spearman: {best_individual:.4f}")
     print(f"Unified score is {'BETTER' if is_better else 'NOT BETTER'} than the best individual metric.")
     if mock:
-        print("[NOTE: Results based on MOCK DATA — not meaningful for research conclusions]")
+        print("[NOTE: Mock results are for layout and testing only, not research conclusions.]")
 
 
 if __name__ == "__main__":

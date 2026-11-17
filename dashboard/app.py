@@ -61,16 +61,6 @@ st.markdown("""
     .metric-card .label { font-size: 0.85rem; color: #718096; font-weight: 500; }
     .metric-card .value { font-size: 2rem; font-weight: 700; color: #68d391; }
 
-    .mock-banner {
-        background: linear-gradient(135deg, #744210, #92400e);
-        border: 1px solid #d97706;
-        border-radius: 8px;
-        padding: 10px 16px;
-        color: #fde68a;
-        font-weight: 600;
-        margin-bottom: 16px;
-    }
-
     .stTab [data-baseweb="tab"] {
         font-weight: 500;
     }
@@ -101,14 +91,6 @@ def load_results_df(path: str) -> pd.DataFrame | None:
     if p.exists():
         return pd.read_csv(p)
     return None
-
-
-def mock_banner():
-    st.markdown(
-        '<div class="mock-banner">⚠️ MOCK DATA — These results were generated with the MockLLMClient. '
-        'Add an API key and rerun experiments for real results.</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def _detect_results_dir() -> tuple[Path, bool]:
@@ -144,9 +126,6 @@ page = st.sidebar.radio(
 
 res_dir, is_mock = _detect_results_dir()
 
-if is_mock:
-    st.sidebar.warning("⚠️ Using mock data. Add API keys for real results.")
-
 st.sidebar.divider()
 st.sidebar.caption(f"Results dir: `{res_dir.name}/`")
 
@@ -155,8 +134,6 @@ st.sidebar.caption(f"Results dir: `{res_dir.name}/`")
 # ═══════════════════════════════════════════════════════════════
 if page == "📊 Overview":
     st.title("📊 Overview")
-    if is_mock:
-        mock_banner()
 
     st.markdown("""
     **Research question**: Can a multi-metric LLM evaluation framework combining G-Eval with
@@ -228,8 +205,6 @@ if page == "📊 Overview":
 # ═══════════════════════════════════════════════════════════════
 elif page == "🧠 G-Eval":
     st.title("🧠 G-Eval and Correlation Analysis")
-    if is_mock:
-        mock_banner()
 
     suffix = "_mock" if is_mock else ""
     corr_df = load_results_df(str(res_dir / f"correlations{suffix}.csv"))
@@ -286,8 +261,6 @@ elif page == "🧠 G-Eval":
 # ═══════════════════════════════════════════════════════════════
 elif page == "⚖️ Bias Analysis":
     st.title("⚖️ Evaluator Bias Analysis")
-    if is_mock:
-        mock_banner()
 
     suffix = "_mock" if is_mock else ""
     bias_path = res_dir / f"exp_f_bias_summary{suffix}.json"
@@ -341,8 +314,6 @@ elif page == "⚖️ Bias Analysis":
 # ═══════════════════════════════════════════════════════════════
 elif page == "🎛️ Unified Score / Human Alignment":
     st.title("🎛️ Unified Score and Human Alignment")
-    if is_mock:
-        mock_banner()
 
     st.markdown("Adjust weights and see live correlation with human scores.")
 
@@ -428,8 +399,6 @@ elif page == "🎛️ Unified Score / Human Alignment":
 # ═══════════════════════════════════════════════════════════════
 elif page == "🗂️ Data":
     st.title("🗂️ SummEval Data Inspector")
-    if is_mock:
-        mock_banner()
 
     try:
         from src.utils import load_summeval
@@ -489,8 +458,6 @@ elif page == "🗂️ Data":
 # ═══════════════════════════════════════════════════════════════
 elif page == "📏 Traditional Metrics":
     st.title("📏 Traditional Metric Results")
-    if is_mock:
-        mock_banner()
     trad_df = load_results_df(str(res_dir / "traditional_metrics.csv"))
     if trad_df is None or trad_df.empty:
         st.info("Run `python experiments/run_exp_b.py` to calculate ROUGE, BLEU and BERTScore.")
@@ -503,8 +470,6 @@ elif page == "📏 Traditional Metrics":
 
 elif page == "🏆 Model Rankings":
     st.title("🏆 System Rankings")
-    if is_mock:
-        mock_banner()
     ranking_path = res_dir / f"exp_c_system_rankings{'_mock' if is_mock else ''}.csv"
     ranking_df = load_results_df(str(ranking_path))
     if ranking_df is not None and not ranking_df.empty:

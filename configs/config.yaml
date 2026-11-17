@@ -1,6 +1,6 @@
 llm:
-  provider: mock
-  model: mock-model
+  provider: openrouter
+  model: openai/gpt-4o-mini
   temperature: 1.0
   max_tokens: 5
   top_p: 1.0
@@ -20,15 +20,9 @@ geval:
     - no_description
 
 judge_models:
-  - provider: mock
-    model: mock-model-a
-    label: Mock-Judge-A
-  - provider: mock
-    model: mock-model-b
-    label: Mock-Judge-B
-  - provider: mock
-    model: mock-model-c
-    label: Mock-Judge-C
+  - provider: openrouter
+    model: openai/gpt-4o-mini
+    label: OpenRouter-GPT-4o-mini
 
 generate_responses:
   enabled: false
