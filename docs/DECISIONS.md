@@ -5,9 +5,9 @@ This document records the design choices, architectural decisions, and intention
 ---
 
 ## 1. Mock Client Architecture (`MockLLMClient`)
-- **Context**: The evaluation pipeline must be completely testable, verifiable, and runnable end-to-end without requiring active paid API keys.
-- **Decision**: Implemented `MockLLMClient` in `src/llm_clients.py`. It uses a deterministic hash (SHA-256 of the prompt text combined with an optional random seed) to generate reproducible, realistic scores, synthetic logprob distributions, and token completions.
-- **Isolation Policy**: All mock outputs are written exclusively to `results/_mock/` and are never saved to `results/`. Any figure or summary table generated with mock data explicitly features `[MOCK DATA]` in its title and annotations to prevent confusion with empirical research findings.
+- **Context**: The pipeline must run without API keys for engineering verification.
+- **Decision**: `MockLLMClient` produces deterministic pseudo-random scores and synthetic logprobs, seeded from its request identity. Mock scores are not empirical and must never support research conclusions.
+- **Isolation Policy**: LLM-derived mock artifacts are saved under `results/_mock/` and carry `MOCK DATA` labels. Exp B is an API-independent real metric computation, including when invoked as part of a mock pipeline; its output is labeled `REAL DATA`.
 
 ---
 
@@ -24,9 +24,10 @@ This document records the design choices, architectural decisions, and intention
 ## 3. Prompt Template Fidelity and Auto-CoT
 - **Context**: The paper evaluates four dimensions on SummEval: Coherence, Consistency, Fluency, and Relevance.
 - **Decision**:
-  - The base prompts from the official reference repository (`reference/geval/prompts/summeval/`) are preserved verbatim in `prompts/`.
-  - In the paper, chain-of-thought (CoT) evaluation steps were generated once by GPT-4 and cached. We implement `generate_auto_cot` in `src/geval_evaluator.py`, which generates steps if not present and caches them in `prompts/auto_cot_<dimension>.txt`.
-  - Ablation prompts (`no_cot`, `no_description`) are isolated in `prompts/ablation/`.
+  - Dimension prompts and their scoring criteria live in `prompts/`; fluency uses the required 1-3 G-Eval scale and the other dimensions use 1-5.
+  - Real runs generate and persist Auto-CoT steps when the prompt cache is empty. Mock runs use deterministic local steps and do not write to prompt files.
+  - The configured ablations are `full`, `no_cot`, and `no_description`; the project does not claim to implement a separate `no_probs` ablation.
+  - The original checkout's upstream reference directory was empty, so prompt provenance is not independently checksum-verified.
 
 ---
 
@@ -52,22 +53,37 @@ This document records the design choices, architectural decisions, and intention
   1. **Summary-level (Paper Protocol)**: For each of the 100 source articles, compute Spearman $\rho$, Kendall $\tau$, and Pearson $r$ across the 16 candidate summaries, then average across all 100 documents. This matches Table 1 in Liu et al. (2023).
   2. **System-level**: Aggregate scores per system across all documents (16 points total) and correlate system rankings.
   3. **Sample-level (Pooled)**: Directly correlate all 1,600 pairs without grouping.
-  Confidence intervals (95%) are computed via 1,000 cluster-bootstrap iterations grouped by document ID.
+  95% confidence intervals for summary-level correlations use 1,000 seeded document-cluster bootstrap resamples. Other reported correlation levels are point estimates.
 
 ---
 
 ## 7. BERTScore Model Selection
 - **Context**: `roberta-large` is the gold standard for BERTScore in academic benchmarks, but running it on CPU-only machines with limited RAM can cause out-of-memory errors.
-- **Decision**: Implemented automatic fallback in `src/traditional_metrics.py`. If CUDA is available, `roberta-large` is loaded. If on CPU, it gracefully defaults to `distilbert-base-uncased` unless explicitly overridden via the `BERTSCORE_MODEL` environment variable.
+- **Decision**: `roberta-large` is preferred when supported; CPU-only runs use the configured `distilbert-base-uncased` fallback. The selected model is recorded with each metric row.
 
 ---
 
 ## 8. Caching and Resumability
 - **Context**: Evaluating 1,600 records across 4 dimensions with multiple ablations requires over 19,200 LLM calls. An unexpected network interruption or rate limit could waste time and money.
-- **Decision**: Built a persistent SQLite disk cache (`DiskCache` in `src/utils.py`). Cache keys are SHA-256 hashes of `(provider, model, prompt, temperature, max_tokens, top_p)`. Any pipeline execution checks the cache before dispatching network requests, enabling seamless resumption from interruptions.
+- **Decision**: A persistent SQLite disk cache uses SHA-256 keys over provider, model, prompt and request parameters. G-Eval score rows are also persisted incrementally for record-level resume. Cache files are local and git-ignored.
 
 ---
 
 ## 9. Data Leakage Prevention in Learned Combiner
 - **Context**: In Experiment G (Unified Score), a supervised Ridge regression model is trained on a subset to learn optimal metric weights.
 - **Decision**: Implemented 5-fold `GroupKFold` cross-validation grouped strictly by `doc_id`. This guarantees that summaries generated for the same source document never appear in both train and validation splits, preventing overfitting to specific source document characteristics.
+
+The grid search and learned combiner scale features from each training fold only.
+The selected grid weights are then applied to out-of-fold predictions for
+comparison. Human scores are targets for supervised validation and are not
+components of the automatic unified score.
+
+## 10. Human ratings and bias metadata
+
+Experiment D never generates or imputes human labels. Without
+`data/human_ratings.csv`, it reports SummEval expert annotations as the only
+human reference and exports a blank rating sheet.
+
+Self-preference analysis is only meaningful when judge-family labels are
+configured. Position/order effects are reported as not estimable because the
+dataset contains no randomized presentation-order metadata.

@@ -133,13 +133,13 @@ st.sidebar.divider()
 page = st.sidebar.radio(
     "Navigate to",
     [
-        "📊 Overview & Rankings",
-        "🔥 Correlation Heatmap",
+        "📊 Overview",
+        "🗂️ Data",
+        "📏 Traditional Metrics",
+        "🧠 G-Eval",
+        "🏆 Model Rankings",
         "⚖️ Bias Analysis",
-        "🎛️ Unified Score Explorer",
-        "🔍 Sample Inspector",
-        "👤 Human Rating UI",
-        "🚀 Live G-Eval",
+        "🎛️ Unified Score / Human Alignment",
     ],
 )
 
@@ -154,8 +154,8 @@ st.sidebar.caption(f"Results dir: `{res_dir.name}/`")
 # ═══════════════════════════════════════════════════════════════
 # PAGE 1: Overview & Rankings
 # ═══════════════════════════════════════════════════════════════
-if page == "📊 Overview & Rankings":
-    st.title("📊 Overview & Model Rankings")
+if page == "📊 Overview":
+    st.title("📊 Overview")
     if is_mock:
         mock_banner()
 
@@ -229,8 +229,8 @@ if page == "📊 Overview & Rankings":
 # ═══════════════════════════════════════════════════════════════
 # PAGE 2: Correlation Heatmap
 # ═══════════════════════════════════════════════════════════════
-elif page == "🔥 Correlation Heatmap":
-    st.title("🔥 Correlation Heatmap")
+elif page == "🧠 G-Eval":
+    st.title("🧠 G-Eval and Correlation Analysis")
     if is_mock:
         mock_banner()
 
@@ -342,8 +342,8 @@ elif page == "⚖️ Bias Analysis":
 # ═══════════════════════════════════════════════════════════════
 # PAGE 4: Unified Score Weight Explorer
 # ═══════════════════════════════════════════════════════════════
-elif page == "🎛️ Unified Score Explorer":
-    st.title("🎛️ Unified Score Weight Explorer")
+elif page == "🎛️ Unified Score / Human Alignment":
+    st.title("🎛️ Unified Score and Human Alignment")
     if is_mock:
         mock_banner()
 
@@ -399,12 +399,24 @@ elif page == "🎛️ Unified Score Explorer":
         grid_df = pd.read_csv(grid_path).head(5)
         st.dataframe(grid_df.round(4), use_container_width=True)
 
+    alignment_path = res_dir / "exp_d_human_alignment.json"
+    if alignment_path.exists():
+        st.subheader("Human Alignment")
+        alignment_report = json.loads(alignment_path.read_text(encoding="utf-8"))
+        st.info(alignment_report["human_reference"])
+        if alignment_report.get("inter_rater_agreement") is not None:
+            st.json(alignment_report["inter_rater_agreement"])
+        alignment_rows = alignment_report.get("automatic_metric_alignment")
+        if alignment_rows:
+            st.dataframe(pd.DataFrame(alignment_rows), use_container_width=True)
+    else:
+        st.info("Run `python experiments/run_exp_d.py` to generate the expert-alignment report.")
 
 # ═══════════════════════════════════════════════════════════════
-# PAGE 5: Sample Inspector
+# PAGE 2: Dataset inspector
 # ═══════════════════════════════════════════════════════════════
-elif page == "🔍 Sample Inspector":
-    st.title("🔍 Single Sample Inspector")
+elif page == "🗂️ Data":
+    st.title("🗂️ SummEval Data Inspector")
 
     try:
         from src.utils import load_summeval
@@ -458,169 +470,35 @@ elif page == "🔍 Sample Inspector":
 
 
 # ═══════════════════════════════════════════════════════════════
-# PAGE 6: Human Rating UI
+# PAGE 3: Traditional metrics
 # ═══════════════════════════════════════════════════════════════
-elif page == "👤 Human Rating UI":
-    st.title("👤 Human Rating Interface")
-    st.markdown("""
-    Rate summaries on four quality dimensions to contribute to Experiment D.
-    Your ratings will be saved to `data/human_ratings.csv`.
-    """)
-
-    template_path = ROOT / "dashboard" / "human_rating_template.csv"
-    ratings_path = DATA_DIR / "human_ratings.csv"
-
-    if not template_path.exists():
-        st.info("Rating template not generated yet. Run `python experiments/run_exp_d.py` first.")
-        st.stop()
-
-    template_df = pd.read_csv(template_path)
-    # Load existing ratings
-    if ratings_path.exists():
-        existing_ratings = pd.read_csv(ratings_path)
-        rated_ids = set(existing_ratings["id"].tolist())
+elif page == "📏 Traditional Metrics":
+    st.title("📏 Traditional Metric Results")
+    if is_mock:
+        mock_banner()
+    trad_df = load_results_df(str(res_dir / "traditional_metrics.csv"))
+    if trad_df is None and is_mock:
+        trad_df = load_results_df(str(RESULTS_DIR / "traditional_metrics.csv"))
+    if trad_df is None:
+        st.info("Run `python experiments/run_exp_b.py` to calculate ROUGE, BLEU and BERTScore.")
     else:
-        existing_ratings = pd.DataFrame()
-        rated_ids = set()
+        st.dataframe(trad_df.head(100), use_container_width=True)
+        correlations = load_results_df(str(res_dir / "exp_b_correlations.csv"))
+        if correlations is not None:
+            st.subheader("Traditional-metric alignment with expert scores")
+            st.dataframe(correlations, use_container_width=True)
 
-    unrated = template_df[~template_df["id"].isin(rated_ids)]
-    st.info(f"📋 {len(template_df)} total samples | {len(rated_ids)} rated | {len(unrated)} remaining")
-
-    if len(unrated) == 0:
-        st.success("✅ All samples rated! Check `data/human_ratings.csv`.")
-        st.dataframe(existing_ratings.tail(10))
-    else:
-        sample = unrated.iloc[0]
-
-        st.subheader(f"Sample #{int(sample['id'])} | System: {sample['system_id']}")
-        st.text_area("Source Article", sample["source"][:800] + "...", height=120, disabled=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.text_area("Reference", sample["reference"], height=80, disabled=True)
-        with col2:
-            st.text_area("Summary to Rate", sample["system_output"], height=80, disabled=True)
-
-        st.markdown("### Your Ratings")
-        dim_descriptions = {
-            "coherence": "Well-structured and logically organized? (1=poor, 5=excellent)",
-            "consistency": "Factually aligned with the source? (1=many errors, 5=fully consistent)",
-            "fluency": "Grammar, spelling, readability? (1=poor, 2=fair, 3=good)",
-            "relevance": "Covers key information without redundancy? (1=poor, 5=excellent)",
-        }
-        dim_ranges = {"coherence": (1, 5), "consistency": (1, 5), "fluency": (1, 3), "relevance": (1, 5)}
-
-        ratings_input = {}
-        for dim in DIMENSIONS:
-            min_v, max_v = dim_ranges[dim]
-            ratings_input[dim] = st.slider(
-                f"{dim.capitalize()}: {dim_descriptions[dim]}",
-                min_value=min_v, max_value=max_v, value=(min_v + max_v) // 2,
-                key=f"rate_{dim}_{sample['id']}",
-            )
-
-        if st.button("✅ Submit Rating", type="primary"):
-            new_row = {
-                "id": sample["id"],
-                "doc_id": sample["doc_id"],
-                "system_id": sample["system_id"],
-                "rated_coherence": ratings_input["coherence"],
-                "rated_consistency": ratings_input["consistency"],
-                "rated_fluency": ratings_input["fluency"],
-                "rated_relevance": ratings_input["relevance"],
-            }
-            existing_ratings = pd.concat(
-                [existing_ratings, pd.DataFrame([new_row])], ignore_index=True
-            )
-            existing_ratings.to_csv(ratings_path, index=False)
-            st.success(f"✅ Rating saved! ({len(existing_ratings)}/{len(template_df)} complete)")
-            st.rerun()
-
-
-# ═══════════════════════════════════════════════════════════════
-# PAGE 7: Live G-Eval
-# ═══════════════════════════════════════════════════════════════
-elif page == "🚀 Live G-Eval":
-    st.title("🚀 Live G-Eval Scorer")
-    st.markdown("Paste an article and summary to get G-Eval scores in real time.")
-
-    has_key = False
-    env_path = ROOT / ".env"
-    if env_path.exists():
-        content = env_path.read_text()
-        has_key = any(k in content and "your_" not in content
-                      for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"])
-
-    if not has_key:
-        st.warning(
-            "⚠️ No API key detected. Using MockLLMClient (scores are random, not meaningful). "
-            "Add a key to `.env` for real evaluation."
+elif page == "🏆 Model Rankings":
+    st.title("🏆 System Rankings")
+    if is_mock:
+        mock_banner()
+    ranking_path = res_dir / f"exp_c_system_rankings{'_mock' if is_mock else ''}.csv"
+    ranking_df = load_results_df(str(ranking_path))
+    if ranking_df is not None:
+        judge = st.selectbox("Judge", sorted(ranking_df["judge"].dropna().unique()))
+        st.dataframe(
+            ranking_df[ranking_df["judge"] == judge].sort_values("judge_rank"),
+            use_container_width=True,
         )
-        use_mock = True
     else:
-        use_mock = st.checkbox("Use mock client (fast, random scores)", value=False)
-
-    article = st.text_area("Source Article", height=200, placeholder="Paste the news article here...")
-    summary = st.text_area("Summary to Evaluate", height=100, placeholder="Paste the summary here...")
-
-    if st.button("🔍 Evaluate", type="primary"):
-        if not article or not summary:
-            st.error("Please provide both article and summary.")
-        else:
-            with st.spinner("Evaluating..."):
-                try:
-                    import asyncio
-                    from src.llm_clients import create_client, DiskCache
-                    from src.geval_evaluator import GEvalEvaluator
-                    from src.utils import load_config
-
-                    cfg = load_config()
-                    if use_mock:
-                        provider, model = "mock", "mock-model"
-                    else:
-                        provider = cfg["llm"]["provider"]
-                        model = cfg["llm"]["model"]
-
-                    client = create_client(
-                        provider=provider, model=model,
-                        cache=DiskCache(ROOT / "data" / "cache" / "dashboard_cache.db"),
-                    )
-                    evaluator = GEvalEvaluator(client=client)
-
-                    async def evaluate():
-                        await evaluator.setup_cot()
-                        results = {}
-                        for dim in DIMENSIONS:
-                            r = await evaluator.evaluate_record(article, summary, dim)
-                            results[dim] = r
-                        return results
-
-                    results = asyncio.run(evaluate())
-
-                    st.subheader("Results")
-                    cols = st.columns(4)
-                    for i, dim in enumerate(DIMENSIONS):
-                        r = results[dim]
-                        ws = r.get("weighted_score")
-                        score_str = f"{ws:.3f}" if ws is not None and not (isinstance(ws, float) and ws != ws) else "N/A"
-                        cols[i].metric(
-                            dim.capitalize(),
-                            score_str,
-                            help=f"Raw response: {r.get('raw_text', 'N/A')[:50]}"
-                        )
-
-                    if use_mock:
-                        st.caption("⚠️ MOCK scores — not meaningful. Add API key for real evaluation.")
-
-                    # Show probability distribution
-                    for dim in DIMENSIONS:
-                        weights = results[dim].get("logprob_weights", {})
-                        if weights:
-                            st.subheader(f"{dim.capitalize()} Score Distribution")
-                            chart_data = pd.DataFrame(
-                                {"Score": list(weights.keys()), "Probability": list(weights.values())}
-                            )
-                            st.bar_chart(chart_data.set_index("Score"))
-
-                except Exception as e:
-                    st.error(f"Evaluation error: {e}")
-                    st.exception(e)
+        st.info("Run `python experiments/run_exp_c.py` to generate judge rankings.")

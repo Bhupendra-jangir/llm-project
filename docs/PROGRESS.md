@@ -10,7 +10,7 @@ excluded from Git; they are reproducible from the committed code and config.
 | 2 | LLM adapters, G-Eval, caching/resume, mock smoke | Complete | `run_exp_a.py --limit 20 --mock` wrote all four dimensions and three configured ablations under `results/_mock/`; no prompt files were changed. |
 | 3 | Experiments A, C, E and correlation figures | Complete | Mock correlation and ranking outputs verified by `make smoke`; Experiment A reports all three correlation levels and summary-level bootstrap CIs. |
 | 4 | Experiments D, F, G | Complete | Mock pipeline verified human alignment, all five bias-analysis outputs (position marked not estimable), grouped grid search and Ridge CV. |
-| 5 | Dashboard, master runner, methodology and final report | In progress | Dashboard and report verified; phase commit remains. |
+| 5 | Dashboard, master runner, methodology and final report | Complete | AppTest loaded all seven pages without exceptions; `make test` passed 62 tests, Ruff passed, and both `make smoke` and no-key `make smoke-real` completed. |
 
 ## Phase 0 Notes
 

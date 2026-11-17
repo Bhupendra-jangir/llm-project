@@ -8,7 +8,7 @@ endif
 
 PYTHON ?= $(VENV_PYTHON)
 
-.PHONY: install test smoke smoke-real phase0 phase1 phase2 phase3 phase4 phase5 all dashboard
+.PHONY: install test smoke smoke-real phase0 phase1 phase2 phase3 phase4 phase5 all full dashboard
 
 install:
 	$(BOOTSTRAP_PYTHON) -m venv .venv
@@ -28,13 +28,13 @@ phase2:
 	$(PYTHON) experiments/run_exp_a.py --limit 20 --mock
 
 phase3:
-	$(PYTHON) experiments/run_exp_c.py --limit 20
-	$(PYTHON) experiments/run_exp_e.py --limit 80
+	$(PYTHON) experiments/run_exp_c.py --limit 20 --mock
+	$(PYTHON) experiments/run_exp_e.py --limit 80 --mock
 
 phase4:
-	$(PYTHON) experiments/run_exp_f.py --limit 80
-	$(PYTHON) experiments/run_exp_g.py --limit 80
-	$(PYTHON) experiments/run_exp_d.py
+	$(PYTHON) experiments/run_exp_f.py --limit 80 --mock
+	$(PYTHON) experiments/run_exp_g.py --limit 80 --mock
+	$(PYTHON) experiments/run_exp_d.py --mock
 
 phase5: dashboard
 
@@ -42,11 +42,14 @@ smoke:
 	$(PYTHON) experiments/run_all.py --limit 80 --mock
 
 smoke-real:
-	$(PYTHON) experiments/run_exp_a.py --limit 20
-	$(PYTHON) experiments/run_exp_b.py --limit 20
+	$(PYTHON) experiments/run_exp_a.py --limit 20 --results-dir results/_smoke_real
+	$(PYTHON) experiments/run_exp_b.py --limit 20 --results-dir results/_smoke_real
 
 all:
-	$(PYTHON) experiments/run_all.py --full
+	$(PYTHON) experiments/run_all.py --limit 20
+
+full:
+	$(PYTHON) experiments/run_all.py
 
 dashboard:
 	$(PYTHON) -m streamlit run dashboard/app.py
