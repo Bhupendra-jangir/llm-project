@@ -504,10 +504,15 @@ class OpenAIClient(BaseLLMClient):
         except Exception as exc:
             if exc.__class__.__name__ != "BadRequestError":
                 raise
-            logger.warning("Logprobs unavailable (%s); falling back to n=20 sampling.", exc)
+            n_samples = int(kwargs.get("n_samples", 20))
+            logger.warning(
+                "Logprobs unavailable (%s); falling back to %d samples.",
+                exc,
+                n_samples,
+            )
             return await self._sample_n(
                 prompt,
-                n=20,
+                n=n_samples,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -526,10 +531,14 @@ class OpenAIClient(BaseLLMClient):
                             logprob_data[t] = top_lp.logprob
 
         if not logprob_data:
-            logger.warning("No score-token logprobs returned; falling back to n=20 sampling.")
+            n_samples = int(kwargs.get("n_samples", 20))
+            logger.warning(
+                "No score-token logprobs returned; falling back to %d samples.",
+                n_samples,
+            )
             return await self._sample_n(
                 prompt,
-                n=20,
+                n=n_samples,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -638,8 +647,9 @@ class GeminiClient(BaseLLMClient):
         self, prompt: str, allowed_scores: Sequence[int], **kwargs: Any
     ) -> LLMResponse:
         # Gemini doesn't support logprobs → fall back to sampling
-        logger.warning("Gemini doesn't support logprobs; falling back to n=20 sampling.")
-        return await self._sample_n(prompt, n=20, **kwargs)
+        n_samples = int(kwargs.get("n_samples", 20))
+        logger.warning("Gemini doesn't support logprobs; falling back to %d samples.", n_samples)
+        return await self._sample_n(prompt, n=n_samples, **kwargs)
 
     async def _sample_n(
         self, prompt: str, n: int = 20, temperature: float = 1.0,
@@ -727,8 +737,9 @@ class AnthropicClient(BaseLLMClient):
     async def _complete_with_logprobs(
         self, prompt: str, allowed_scores: Sequence[int], **kwargs: Any
     ) -> LLMResponse:
-        logger.warning("Anthropic doesn't support logprobs; falling back to sampling.")
-        return await self._sample_n(prompt, n=20, **kwargs)
+        n_samples = int(kwargs.get("n_samples", 20))
+        logger.warning("Anthropic doesn't support logprobs; falling back to %d samples.", n_samples)
+        return await self._sample_n(prompt, n=n_samples, **kwargs)
 
     async def _sample_n(
         self, prompt: str, n: int = 20, temperature: float = 1.0,
@@ -834,10 +845,14 @@ class OpenAICompatibleClient(BaseLLMClient):
                             if t not in logprob_data:
                                 logprob_data[t] = top_lp.logprob
             if not logprob_data:
-                logger.warning("No score-token logprobs returned; falling back to n=20 sampling.")
+                n_samples = int(kwargs.get("n_samples", 20))
+                logger.warning(
+                    "No score-token logprobs returned; falling back to %d samples.",
+                    n_samples,
+                )
                 return await self._sample_n(
                     prompt,
-                    n=20,
+                    n=n_samples,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=top_p,
@@ -861,10 +876,15 @@ class OpenAICompatibleClient(BaseLLMClient):
         except Exception as e:
             if e.__class__.__name__ != "BadRequestError":
                 raise
-            logger.warning("Logprobs failed (%s); falling back to n=20 sampling.", e)
+            n_samples = int(kwargs.get("n_samples", 20))
+            logger.warning(
+                "Logprobs failed (%s); falling back to %d samples.",
+                e,
+                n_samples,
+            )
             return await self._sample_n(
                 prompt,
-                n=20,
+                n=n_samples,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 top_p=top_p,
@@ -979,8 +999,9 @@ class OllamaClient(BaseLLMClient):
     async def _complete_with_logprobs(
         self, prompt: str, allowed_scores: Sequence[int], **kwargs: Any
     ) -> LLMResponse:
-        logger.warning("Ollama logprobs not supported; falling back to sampling.")
-        return await self._sample_n(prompt, n=20, **kwargs)
+        n_samples = int(kwargs.get("n_samples", 20))
+        logger.warning("Ollama logprobs not supported; falling back to %d samples.", n_samples)
+        return await self._sample_n(prompt, n=n_samples, **kwargs)
 
     async def _sample_n(
         self, prompt: str, n: int = 20, temperature: float = 1.0,

@@ -94,13 +94,19 @@ def load_results_df(path: str) -> pd.DataFrame | None:
 
 
 def _detect_results_dir() -> tuple[Path, bool]:
-    """Prefer mock outputs for a safe layout preview."""
-    mock_path = MOCK_DIR / "correlations_mock.csv"
-    if mock_path.exists() or (MOCK_DIR / "traditional_metrics.csv").exists():
-        return MOCK_DIR, True
+    """Prefer real pilot outputs, then full real outputs, then mock outputs."""
+    fast_path = RESULTS_DIR / "fast" / "correlations.csv"
+    if fast_path.exists():
+        return RESULTS_DIR / "fast", False
     real_path = RESULTS_DIR / "correlations.csv"
     if real_path.exists():
         return RESULTS_DIR, False
+    mock_fast_path = MOCK_DIR / "fast" / "correlations_mock.csv"
+    if mock_fast_path.exists():
+        return MOCK_DIR / "fast", True
+    mock_path = MOCK_DIR / "correlations_mock.csv"
+    if mock_path.exists() or (MOCK_DIR / "traditional_metrics.csv").exists():
+        return MOCK_DIR, True
     return RESULTS_DIR, False
 
 
@@ -121,13 +127,16 @@ page = st.sidebar.radio(
         "🏆 Model Rankings",
         "⚖️ Bias Analysis",
         "🎛️ Unified Score / Human Alignment",
+        "🚀 Live G-Eval",
     ],
 )
 
 res_dir, is_mock = _detect_results_dir()
 
 st.sidebar.divider()
-st.sidebar.caption(f"Results dir: `{res_dir.name}/`")
+st.sidebar.caption(
+    f"Results dir: `{res_dir.relative_to(ROOT).as_posix()}/`"
+)
 
 # ═══════════════════════════════════════════════════════════════
 # PAGE 1: Overview & Rankings
@@ -480,3 +489,75 @@ elif page == "🏆 Model Rankings":
         )
     else:
         st.info("Run `python experiments/run_exp_c.py` to generate judge rankings.")
+
+elif page == "🚀 Live G-Eval":
+    st.title("🚀 Live G-Eval Scorer")
+    st.markdown("Paste an article and summary to score coherence, consistency, fluency, and relevance.")
+
+    from src.llm_clients import check_api_key_available, create_client
+    from src.utils import DiskCache, load_config
+
+    cfg = load_config()
+    has_key = check_api_key_available(cfg)
+    if not has_key:
+        st.warning(
+            "No API key detected for the configured provider. "
+            "Mock scores are random and are not meaningful."
+        )
+        use_mock = True
+    else:
+        use_mock = st.checkbox("Use mock client (fast, random scores)", value=False)
+
+    article = st.text_area("Source Article", height=200, placeholder="Paste the news article here...")
+    summary = st.text_area("Summary to Evaluate", height=100, placeholder="Paste the summary here...")
+    st.caption("Configured pilot mode uses one sample per dimension and skips Auto-CoT.")
+
+    if st.button("🔍 Evaluate", type="primary"):
+        if not article.strip() or not summary.strip():
+            st.error("Please provide both an article and a summary.")
+        else:
+            with st.spinner("Evaluating all four dimensions..."):
+                try:
+                    import asyncio
+                    from src.geval_evaluator import GEvalEvaluator
+
+                    provider = "mock" if use_mock else cfg["llm"]["provider"]
+                    model = "mock-model" if use_mock else cfg["llm"]["model"]
+                    client = create_client(
+                        provider=provider,
+                        model=model,
+                        cache=DiskCache(ROOT / "data" / "cache" / "dashboard_cache.db"),
+                        concurrency_limit=cfg.get("concurrency_limit", 5),
+                        max_retries=cfg.get("max_retries", 5),
+                        retry_base_delay=cfg.get("retry_base_delay", 1.0),
+                        requests_per_minute=cfg["llm"].get("requests_per_minute", 60),
+                    )
+                    evaluator = GEvalEvaluator(
+                        client=client,
+                        dimensions=DIMENSIONS,
+                        score_mode=cfg["geval"]["score_mode"],
+                        n_samples=cfg["geval"]["n_samples"],
+                        ablation=cfg.get("quick_run", {}).get("ablation", "no_cot"),
+                    )
+
+                    async def evaluate() -> dict:
+                        await evaluator.setup_cot()
+                        results = {}
+                        for dimension in DIMENSIONS:
+                            results[dimension] = await evaluator.evaluate_record(
+                                article, summary, dimension
+                            )
+                        return results
+
+                    results = asyncio.run(evaluate())
+                    st.subheader("G-Eval Scores")
+                    score_columns = st.columns(len(DIMENSIONS))
+                    for column, dimension in zip(score_columns, DIMENSIONS):
+                        score = results[dimension].get("weighted_score")
+                        score_text = f"{score:.3f}" if pd.notna(score) else "N/A"
+                        column.metric(dimension.capitalize(), score_text)
+
+                    if use_mock:
+                        st.caption("Mock scores are random and must not be used as research results.")
+                except Exception as exc:
+                    st.error(f"Evaluation failed: {exc}")

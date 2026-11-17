@@ -11,9 +11,10 @@ provide more reliable model rankings than any single automatic metric?
   and 16 systems.
 - Traditional metrics: full-dataset Experiment B, run locally with Python 3.12
   and CPU BERTScore fallback `distilbert-base-uncased`.
-- LLM judges: no real API keys were configured. G-Eval and judge outputs in
-  `results/_mock/` are deterministic smoke-test data and are excluded from all
-  research conclusions below.
+- LLM judge: one Groq judge ran the bounded pilot on 20 records from 10
+  documents and two systems, using four dimensions, one sample per score, and
+  the `no_cot` ablation. The run encountered rate limits but saved scores for
+  all 20 records; see `results/fast/run_metadata.json`.
 - Human ratings: no new human rating file was present. SummEval's existing
   expert annotations are the only human reference used.
 
@@ -37,22 +38,33 @@ These are API-free traditional-metric results; they do not represent G-Eval.
 The results show that metric performance varies by dimension, but do not by
 themselves establish that a composite metric improves rankings.
 
+## Bounded Groq pilot
+
+The pilot produced 100 score rows across 20 summaries: four judged dimensions
+and a derived overall score. No score rows were missing. On this small sample,
+the best unified score had summary-level Spearman $\rho=0.1111$, while the
+best individual metric (`rouge2_ref`) had $\rho=0.3333$. Thus, this pilot did
+not show an advantage for the unified score. The pilot also experienced Groq
+rate limits and retries.
+
+These estimates are highly exploratory: only 10 documents and two systems
+were included, one judge and one sample were used, and no new human ratings or
+multi-judge agreement estimates were collected. They must not be interpreted
+as full-dataset or statistically robust findings.
+
 ## G-Eval paper comparison
 
-Liu et al. report 0.514 summary-level Spearman for G-Eval-4 on SummEval. A
-real G-Eval reproduction was **not run**, so this project has no empirical
-value to compare with 0.514 and no defensible distance-from-paper estimate.
-The mock smoke-test correlations are deliberately not compared to the paper.
-A full real run must first be performed with configured API credentials and
-the same dataset protocol.
+Liu et al. report 0.514 summary-level Spearman for G-Eval-4 on SummEval. The
+20-record pilot is not a full reproduction and is not directly comparable to
+that benchmark. A full real run must use the complete dataset and the same
+evaluation protocol.
 
 ## Answer to the research question
 
-**Inconclusive.** Experiment B supplies full-dataset traditional baselines, but
-there are no real G-Eval, multi-judge, or unified-score predictions to compare
-against those baselines. Mock outputs only verify execution and output
-contracts. It would be misleading to claim that the multi-metric framework
-does or does not outperform individual metrics.
+**Inconclusive.** The bounded pilot's best unified score did not exceed the
+best individual metric, but its small sample is insufficient to answer the
+research question. Full-dataset G-Eval and multi-judge comparisons, plus human
+validation, are still needed for a defensible conclusion.
 
 ## Limitations
 
@@ -68,14 +80,14 @@ does or does not outperform individual metrics.
    correlations; pooled and system-level correlations are point estimates.
 6. G-Eval's prompt fidelity has not been independently checksum-verified
    against the upstream repository in this checkout.
+7. The Groq pilot used one sample per score and encountered rate limits; retries
+   increase request count and the resulting correlations have wide uncertainty.
 
 ## Reproduction
 
 1. Install dependencies with `make install`.
-2. Copy `.env.example` to `.env`, add the required provider credentials, and
-   set `llm.provider`/`llm.model` in `configs/config.yaml`.
-3. Configure at least two real entries in `judge_models`; the checked-in
-   entries default to mock models for safe API-free execution.
-4. Run `make smoke-real` and `make all` first. Review each cost estimate.
-5. Run `make full` for the 1,600-record pipeline. The SQLite request cache
-   allows completed requests to be reused.
+2. Copy `.env.example` to `.env` and set `GROQ_API_KEY`.
+3. Run `python -m experiments.run_fast --dry-run`, then
+   `python -m experiments.run_fast` for the bounded single-judge pilot.
+4. For research conclusions, configure the full dataset and multiple real
+   judges, review cost estimates, and run the complete pipeline.

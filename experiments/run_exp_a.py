@@ -59,6 +59,7 @@ def run_experiment_a(
     results_dir: Path | None = None,
     ablations: list | None = None,
     seed: int = 42,
+    records: list | None = None,
 ) -> None:
     """Run Experiment A: G-Eval baseline with ablation variants."""
     cfg = load_config()
@@ -80,10 +81,10 @@ def run_experiment_a(
         provider = "mock"
 
     mock = provider == "mock"
-    if mock:
-        results_dir = Path(cfg["mock_results_dir"])
-    elif results_dir is None:
-        results_dir = Path(cfg["results_dir"])
+    if results_dir is None:
+        results_dir = (
+            Path(cfg["mock_results_dir"]) if mock else Path(cfg["results_dir"])
+        )
     ensure_results_dir(results_dir)
 
     model = "mock-model" if mock else llm_cfg["model"]
@@ -104,7 +105,9 @@ def run_experiment_a(
     ablation_list = ablations or cfg["geval"]["ablations"]
 
     logger.info("=== Experiment A: G-Eval Baseline ===")
-    records = load_summeval()
+    has_sampled_records = records is not None
+    records = records if has_sampled_records else load_summeval()
+    evaluation_limit = None if has_sampled_records and limit is None else limit
 
     # Print cost estimate
     dummy_ev = GEvalEvaluator(client=client, score_mode=score_mode, n_samples=n_samples)
@@ -118,7 +121,7 @@ def run_experiment_a(
                 ablation=ablation,
                 client=client,
                 records=records,
-                limit=limit,
+                limit=evaluation_limit,
                 score_mode=score_mode,
                 n_samples=n_samples,
                 results_dir=results_dir,
@@ -134,7 +137,7 @@ def run_experiment_a(
 
     all_scores = pd.concat(all_dfs, ignore_index=True)
     human_df = records_to_dataframe(records)
-    if limit:
+    if limit and not has_sampled_records:
         human_df = human_df.iloc[:limit]
 
     # Compute correlations

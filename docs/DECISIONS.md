@@ -87,3 +87,10 @@ human reference and exports a blank rating sheet.
 Self-preference analysis is only meaningful when judge-family labels are
 configured. Position/order effects are reported as not estimable because the
 dataset contains no randomized presentation-order metadata.
+
+## 11. Bounded Groq pilot
+
+The quick pilot selects 20 records spanning 10 documents and two systems,
+uses one Groq judge, one sample per score, and the `no_cot` ablation. It is
+intended to verify the end-to-end pipeline with bounded API usage; its
+correlations are exploratory and do not replace the full SummEval protocol.

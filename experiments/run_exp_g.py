@@ -33,6 +33,8 @@ def run_experiment_g(
     mock: bool = False,
     results_dir: Path | None = None,
     seed: int = 42,
+    records: list | None = None,
+    weights: dict | None = None,
 ) -> None:
     cfg = load_config()
     set_random_seed(seed)
@@ -41,29 +43,53 @@ def run_experiment_g(
     )
     ensure_results_dir(res_dir)
 
-    records = load_summeval()
+    has_sampled_records = records is not None
+    records = records if has_sampled_records else load_summeval()
     trad_df = compute_all_traditional_metrics(
-        records, limit=limit, results_dir=res_dir,
+        records, limit=None if has_sampled_records else limit, results_dir=res_dir,
         output_path=res_dir / "traditional_metrics.csv",
+        bertscore_preferred_model=cfg["bertscore"]["preferred_model"],
+        bertscore_fallback_model=cfg["bertscore"]["fallback_model"],
+        bertscore_batch_size=cfg["bertscore"]["batch_size"],
     )
     suffix = "_mock" if mock else ""
     geval_path = res_dir / f"geval_scores_full{suffix}.csv"
+    if not geval_path.exists():
+        geval_path = res_dir / f"geval_scores_no_cot{suffix}.csv"
     if not geval_path.exists():
         raise FileNotFoundError(f"Run Experiment A before G; missing {geval_path}")
     geval_df = pd.read_csv(geval_path)
 
     judge_path = res_dir / f"exp_c_judge_scores{suffix}.csv"
-    if not judge_path.exists():
-        raise FileNotFoundError(f"Run Experiment C before G; missing {judge_path}")
-    judge_df = pd.read_csv(judge_path)
-    combined = merge_unified_score_inputs(trad_df, geval_df, judge_df)
-    if limit:
+    if judge_path.exists():
+        judge_df = pd.read_csv(judge_path)
+        combined = merge_unified_score_inputs(trad_df, geval_df, judge_df)
+    elif weights is not None and weights.get("ensemble_agreement", 0.0) == 0.0:
+        overall_scores = geval_df.loc[
+            geval_df["dimension"] == "overall",
+            ["doc_id", "system_id", "weighted_score"],
+        ].rename(columns={"weighted_score": "geval_overall"})
+        combined = trad_df.merge(
+            overall_scores,
+            on=["doc_id", "system_id"],
+            how="left",
+            validate="one_to_one",
+        )
+        combined["geval_judge_std"] = 0.0
+    else:
+        raise FileNotFoundError(
+            f"Run Experiment C before G, or provide zero ensemble weight for a "
+            f"single-judge pilot; missing {judge_path}"
+        )
+    if limit and not has_sampled_records:
         combined = combined.iloc[:limit]
 
     target_human = "human_overall"
 
     # (a) Fixed weights
-    default_weights = cfg.get("unified_score", {}).get("default_weights", DEFAULT_WEIGHTS)
+    default_weights = weights or cfg.get("unified_score", {}).get(
+        "default_weights", DEFAULT_WEIGHTS
+    )
     combined["unified_fixed"] = compute_unified_score(combined, weights=default_weights)
 
     # (b) Grid search
@@ -109,6 +135,7 @@ def run_experiment_g(
     comparison = compare_all_metrics(
         combined, human_col=target_human, metric_cols=metric_cols,
         unified_col="unified_fixed", seed=seed,
+        n_bootstrap=cfg.get("bootstrap", {}).get("n_resamples", 1000),
     )
     comparison["data_label"] = "MOCK DATA" if mock else "REAL DATA"
     combined["data_label"] = "MOCK DATA" if mock else "REAL DATA"

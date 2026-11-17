@@ -7,13 +7,16 @@ __pycache__/
 
 # Local data and model caches
 data/cache/
+llm-evaluation-project/
 data/human_ratings.csv
 hf_cache/
 models/
 
-# Generated experiment outputs stay local and are kept in separate real/mock folders.
+# Full-run outputs stay local; the bounded Groq pilot is checked in for reference.
 results/*
 !results/.gitkeep
+!results/fast/
+!results/fast/**
 !results/_mock/
 !results/figures/
 results/_mock/*

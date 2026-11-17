@@ -125,7 +125,15 @@ def compute_length_bias(
         partial_df = pd.DataFrame({"metric": metric, "length": lengths, "human": human})
         pc = pg.partial_corr(data=partial_df, x="metric", y="length", covar="human", method="spearman")
         partial_rho = float(pc["r"].iloc[0])
-        partial_p = float(pc["p-val"].iloc[0])
+        p_value_column = next(
+            (column for column in ("p-val", "p_val") if column in pc.columns),
+            None,
+        )
+        if p_value_column is None:
+            raise RuntimeError(
+                f"Unexpected Pingouin partial_corr columns: {list(pc.columns)}"
+            )
+        partial_p = float(pc[p_value_column].iloc[0])
     except ImportError:
         # Fallback: subtract regression component
         coeffs = np.polyfit(human, metric, 1)

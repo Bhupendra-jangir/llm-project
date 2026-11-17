@@ -24,8 +24,9 @@ excluded from Git; they are reproducible from the committed code and config.
   normalization, bootstrap validation, and document-group split separation.
 - The full traditional-metric correlation run is real dataset output (not LLM
   mock data); its CPU BERTScore implementation uses the configured fallback
-  encoder. No real LLM judge run has been performed because no API key is set.
+  encoder. A separate 20-record Groq pilot has completed; its outputs are
+  exploratory and do not constitute a full-dataset judge run.
 - The final local validation ran `make test` (62 passed), repository-wide Ruff,
   `make smoke` (complete mock pipeline), `make smoke-real` (explicit no-key
-  fallback), and Streamlit AppTest over all seven pages. No real LLM evaluation
-  was performed; see `FINAL_REPORT.md` for the evidence-based conclusion.
+  fallback), and Streamlit AppTest over all seven pages. See `FINAL_REPORT.md`
+  for pilot results and limitations.

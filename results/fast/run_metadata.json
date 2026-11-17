@@ -1,0 +1,27 @@
+{
+  "mode": "single-judge pilot",
+  "provider": "groq",
+  "model": "openai/gpt-oss-20b",
+  "is_mock": false,
+  "records": 20,
+  "documents": 10,
+  "systems": [
+    "M0",
+    "M9"
+  ],
+  "dimensions": [
+    "coherence",
+    "consistency",
+    "fluency",
+    "relevance"
+  ],
+  "ablation": "no_cot",
+  "expected_geval_api_calls_max": 80,
+  "ensemble_comparison": "omitted; only one judge is used",
+  "human_rating_template": "dashboard/human_rating_template.csv",
+  "limitations": [
+    "Small deterministic subset; correlations and confidence intervals are exploratory.",
+    "No multi-judge ensemble comparison or fresh summary generation.",
+    "Manual human ratings are not included until collected."
+  ]
+}

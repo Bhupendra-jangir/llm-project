@@ -172,3 +172,12 @@ Evaluated with 5-fold `GroupKFold` grouped by `doc_id` to strictly prevent sourc
   estimates.
 - Correlation is not causal evidence of evaluator bias. Family bias is only
   estimable when explicit, validated family labels are available.
+
+## 10. Bounded single-judge pilot
+
+The quick runner selects two systems from each of ten evenly spaced SummEval
+documents (20 records). It scores coherence, consistency, fluency, and
+relevance with one judge, one sample per score, and the `no_cot` ablation.
+The expected workload is 80 scoring requests before retries; provider rate
+limits can increase the number of attempts. This pilot is an execution check
+and exploratory analysis, not a substitute for the full benchmark protocol.

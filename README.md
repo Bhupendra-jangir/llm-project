@@ -7,7 +7,7 @@ Extends *G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment* (Liu et
 - Multi-model judge comparison
 - Bias analysis (length, extractiveness, system-type)
 - Unified score with learned combination
-- 7-page Streamlit dashboard
+- 8-page Streamlit dashboard, including live custom-text G-Eval
 
 ---
 
@@ -55,6 +55,22 @@ With no API key configured, G-Eval and judge experiments explain how to
 configure a real run and use mock mode only. `make full` requires real
 credentials for the primary judge and all configured judges.
 
+## Bounded Groq Pilot
+
+The low-cost pilot uses 20 records from 10 documents and two systems. It
+evaluates four dimensions with one Groq judge, one sample per score, and the
+`no_cot` ablation. Run it from the repository root:
+
+```powershell
+python -m experiments.run_fast --dry-run
+python -m experiments.run_fast
+python -m streamlit run dashboard/app.py
+```
+
+The expected G-Eval workload is 80 scoring requests before retries. Groq rate
+limits can add retries. Results are saved in `results/fast/`; this small pilot
+is exploratory and is not sufficient for strong research claims.
+
 ## Current Results (Real, API-Free Metrics)
 
 Experiment B completed on all 1,600 SummEval records using the CPU fallback
@@ -68,10 +84,10 @@ Experiment B completed on all 1,600 SummEval records using the CPU fallback
 | Relevance | BERTScore recall vs. reference | 0.312 | [0.247, 0.374] |
 | Overall | BERTScore precision vs. source | 0.278 | [0.223, 0.331] |
 
-These are real traditional-metric correlations, not G-Eval results. No real
-LLM-judge run has been performed; mock scores are strictly for smoke tests and
-are not research evidence. The research question remains inconclusive pending
-a real, full-dataset judge run.
+These are real traditional-metric correlations, not G-Eval results. A separate
+20-record Groq pilot is reported in `results/fast/run_metadata.json` and
+`docs/FINAL_REPORT.md`; it is not a full-dataset reproduction. Mock scores are
+strictly for smoke tests and are not research evidence.
 ---
 
 ## Project Structure
@@ -110,7 +126,7 @@ llm-project/
 │   └── run_all.py               # Master runner
 ├── results/                     # All CSV + figure outputs
 │   └── _mock/                   # Mock judge outputs (clearly labeled)
-├── dashboard/app.py             # 7-page Streamlit dashboard
+├── dashboard/app.py             # 8-page Streamlit dashboard
 ├── tests/                       # pytest test suite
 └── docs/
     ├── DECISIONS.md             # Design decisions + paper deviations

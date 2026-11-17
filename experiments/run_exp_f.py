@@ -29,6 +29,7 @@ def run_experiment_f(
     mock: bool = False,
     results_dir: Path | None = None,
     seed: int = 42,
+    records: list | None = None,
 ) -> None:
     cfg = load_config()
     set_random_seed(seed)
@@ -37,9 +38,12 @@ def run_experiment_f(
     )
     ensure_results_dir(res_dir)
 
-    records = load_summeval()
+    has_sampled_records = records is not None
+    records = records if has_sampled_records else load_summeval()
     trad_df = compute_all_traditional_metrics(
-        records, limit=limit, results_dir=res_dir,
+        records, limit=None if has_sampled_records else limit, results_dir=res_dir,
+        bertscore_model=cfg.get("bertscore", {}).get("preferred_model"),
+        bertscore_batch_size=cfg.get("bertscore", {}).get("batch_size", 32),
         output_path=res_dir / "traditional_metrics.csv",
     )
 
@@ -49,12 +53,14 @@ def run_experiment_f(
         "system_output": r["system_output"], "source": r["source"]
     } for r in records])
     combined = trad_df.merge(text_df, on=["doc_id", "system_id"], how="left")
-    if limit:
+    if limit and not has_sampled_records:
         combined = combined.iloc[:limit]
 
     # Add G-Eval if available
     suffix = "_mock" if mock else ""
     geval_path = res_dir / f"geval_scores_full{suffix}.csv"
+    if not geval_path.exists():
+        geval_path = res_dir / f"geval_scores_no_cot{suffix}.csv"
     if geval_path.exists():
         geval_df = pd.read_csv(geval_path)
         for dim in DIMENSIONS:

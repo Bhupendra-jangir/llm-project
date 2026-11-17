@@ -129,6 +129,19 @@ class TestGEvalEvaluator:
         assert client.calls == 1
         assert len(df[df["dimension"] == "coherence"]) == 1
 
+    def test_no_cot_ablation_skips_cot_generation(self, monkeypatch):
+        async def unexpected_cot(*args, **kwargs):
+            raise AssertionError("no-COT ablation must not generate CoT")
+
+        monkeypatch.setattr("src.geval_evaluator.generate_auto_cot", unexpected_cot)
+        evaluator = GEvalEvaluator(
+            client=MockLLMClient(seed=42),
+            dimensions=["coherence"],
+            ablation="no_cot",
+        )
+
+        asyncio.run(evaluator.setup_cot())
+
 
 def test_mock_auto_cot_does_not_write_to_prompt_directory(tmp_path, monkeypatch):
     import src.geval_evaluator as evaluator_module
@@ -144,7 +157,7 @@ def test_mock_auto_cot_does_not_write_to_prompt_directory(tmp_path, monkeypatch)
     assert not (tmp_path / "auto_cot_coherence.txt").exists()
 
 
-def test_openai_missing_logprobs_uses_twenty_sample_fallback():
+def test_openai_missing_logprobs_uses_configured_sample_count():
     client = OpenAIClient.__new__(OpenAIClient)
     client.model = "test-model"
     client.provider = "openai"
@@ -177,9 +190,13 @@ def test_openai_missing_logprobs_uses_twenty_sample_fallback():
     client._sample_n = sample_n
 
     result = asyncio.run(
-        client._complete_with_logprobs("prompt", allowed_scores=[1, 2, 3, 4, 5])
+        client._complete_with_logprobs(
+            "prompt",
+            allowed_scores=[1, 2, 3, 4, 5],
+            n_samples=1,
+        )
     )
-    assert sample_counts == [20]
+    assert sample_counts == [1]
     assert result.weighted_score == 3
 
 

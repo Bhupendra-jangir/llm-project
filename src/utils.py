@@ -129,6 +129,41 @@ def load_summeval(
     return data
 
 
+def select_quick_sample(
+    records: List[Dict[str, Any]],
+    n_documents: int = 10,
+    n_systems_per_document: int = 2,
+) -> List[Dict[str, Any]]:
+    """Select a deterministic sample spanning documents and systems."""
+    if n_documents < 1 or n_systems_per_document < 1:
+        raise ValueError("Sample sizes must be positive.")
+    if not records:
+        return []
+
+    documents = sorted({str(record["doc_id"]) for record in records})
+    systems = sorted({str(record["system_id"]) for record in records})
+    selected_docs = {
+        documents[index]
+        for index in np.linspace(
+            0, len(documents) - 1, min(n_documents, len(documents))
+        ).round().astype(int)
+    }
+    selected_systems = {
+        systems[index]
+        for index in np.linspace(
+            0, len(systems) - 1, min(n_systems_per_document, len(systems))
+        ).round().astype(int)
+    }
+    sample = [
+        record for record in records
+        if str(record["doc_id"]) in selected_docs
+        and str(record["system_id"]) in selected_systems
+    ]
+    if not sample:
+        raise ValueError("No records matched the requested quick sample.")
+    return sample
+
+
 def validate_summeval(
     data: List[Dict[str, Any]],
     require_complete: bool = False,

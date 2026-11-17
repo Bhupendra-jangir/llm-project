@@ -15,6 +15,7 @@ from src.utils import (
     minmax_normalize, DiskCache, load_summeval,
     validate_summeval, normalize_summeval_record, records_to_dataframe, CostTracker,
     bootstrap_summary_level_ci,
+    select_quick_sample,
 )
 
 
@@ -172,6 +173,15 @@ class TestDataLoading:
         df = records_to_dataframe(data)
         assert len(df) == 10
         assert "human_coherence" in df.columns
+
+    def test_quick_sample_spans_requested_documents_and_systems(self):
+        records = load_summeval()
+
+        sample = select_quick_sample(records, n_documents=10, n_systems_per_document=2)
+
+        assert len({record["doc_id"] for record in sample}) == 10
+        assert {record["system_id"] for record in sample} == {"M0", "M9"}
+        assert len(sample) == 20
 
     def test_normalizes_alias_fields(self):
         record = {

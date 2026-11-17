@@ -8,7 +8,7 @@ endif
 
 PYTHON ?= $(VENV_PYTHON)
 
-.PHONY: install test smoke smoke-real phase0 phase1 phase2 phase3 phase4 phase5 all full dashboard
+.PHONY: install test smoke smoke-real fast phase0 phase1 phase2 phase3 phase4 phase5 all full dashboard
 
 install:
 	$(BOOTSTRAP_PYTHON) -m venv .venv
@@ -44,6 +44,9 @@ smoke:
 smoke-real:
 	$(PYTHON) experiments/run_exp_a.py --limit 20 --results-dir results/_smoke_real
 	$(PYTHON) experiments/run_exp_b.py --limit 20 --results-dir results/_smoke_real
+
+fast:
+	$(PYTHON) -m experiments.run_fast
 
 all:
 	$(PYTHON) experiments/run_all.py --limit 20

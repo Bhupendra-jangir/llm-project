@@ -48,6 +48,7 @@ def run_experiment_e(
     mock: bool = False,
     results_dir: Path | None = None,
     seed: int = 42,
+    records: list | None = None,
 ) -> pd.DataFrame:
     cfg = load_config()
     set_random_seed(seed)
@@ -57,18 +58,24 @@ def run_experiment_e(
     ensure_results_dir(res_dir)
     ensure_results_dir(res_dir / "figures")
 
-    records = load_summeval()
+    has_sampled_records = records is not None
+    records = records if has_sampled_records else load_summeval()
     human_df = records_to_dataframe(records)
 
     trad_df = compute_all_traditional_metrics(
-        records, limit=limit, results_dir=res_dir,
+        records, limit=None if has_sampled_records else limit, results_dir=res_dir,
         output_path=res_dir / "traditional_metrics.csv",
+        bertscore_preferred_model=cfg["bertscore"]["preferred_model"],
+        bertscore_fallback_model=cfg["bertscore"]["fallback_model"],
+        bertscore_batch_size=cfg["bertscore"]["batch_size"],
     )
 
     # Try to load G-Eval scores
     suffix = "_mock" if mock else ""
     geval_path = res_dir / f"geval_scores_full{suffix}.csv"
     geval_df = None
+    if not geval_path.exists():
+        geval_path = res_dir / f"geval_scores_no_cot{suffix}.csv"
     if geval_path.exists():
         geval_df = pd.read_csv(geval_path)
         logger.info(f"Loaded G-Eval scores from {geval_path}")
@@ -80,7 +87,7 @@ def run_experiment_e(
         columns=[c for c in trad_df.columns if c.startswith("human_")], errors="ignore"
     )
     combined = combined.merge(trad_no_human, on=["doc_id", "system_id"], how="left")
-    if limit:
+    if limit and not has_sampled_records:
         combined = combined.iloc[:limit]
 
     metric_cols = list(TRADITIONAL_METRIC_COLS)

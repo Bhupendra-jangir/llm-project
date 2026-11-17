@@ -34,6 +34,8 @@ def run_experiment_b(
     limit: int | None = None,
     results_dir: Path | None = None,
     seed: int = 42,
+    records: list | None = None,
+    mock: bool = False,
 ) -> pd.DataFrame:
     """Run Experiment B: traditional metrics evaluation."""
     cfg = load_config()
@@ -42,20 +44,22 @@ def run_experiment_b(
     ensure_results_dir(res_dir)
 
     logger.info("=== Experiment B: Traditional Metrics ===")
-    records = load_summeval(limit=limit)
+    has_sampled_records = records is not None
+    records = records if has_sampled_records else load_summeval(limit=limit)
     logger.info(f"Loaded {len(records)} records.")
 
     # Compute or load metrics
     metrics_df = compute_all_traditional_metrics(
         records,
-        limit=limit,
+        limit=None if has_sampled_records else limit,
         results_dir=res_dir,
         output_path=res_dir / "traditional_metrics.csv",
         bertscore_preferred_model=cfg["bertscore"]["preferred_model"],
         bertscore_fallback_model=cfg["bertscore"]["fallback_model"],
         bertscore_batch_size=cfg["bertscore"]["batch_size"],
     )
-    metrics_df["data_label"] = "REAL DATA"
+    data_label = "MOCK DATA" if mock else "REAL DATA"
+    metrics_df["data_label"] = data_label
     save_results(metrics_df, res_dir / "traditional_metrics.csv")
     logger.info(f"Metrics DataFrame shape: {metrics_df.shape}")
 
@@ -113,7 +117,7 @@ def run_experiment_b(
             })
 
     corr_df = pd.DataFrame(rows)
-    corr_df["data_label"] = "REAL DATA"
+    corr_df["data_label"] = data_label
     out_path = res_dir / "exp_b_correlations.csv"
     save_results(corr_df, out_path)
     logger.info(f"Saved correlations to {out_path}")

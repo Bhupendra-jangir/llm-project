@@ -1,14 +1,14 @@
 llm:
-  provider: openrouter
-  model: openai/gpt-4o-mini
+  provider: groq
+  model: openai/gpt-oss-20b
   temperature: 1.0
   max_tokens: 5
   top_p: 1.0
-  requests_per_minute: 60
+  requests_per_minute: 30
 
 geval:
-  score_mode: logprobs
-  n_samples: 20
+  score_mode: sampling
+  n_samples: 1
   dimensions:
     - coherence
     - consistency
@@ -31,15 +31,15 @@ generate_responses:
   prompt: "Please write a concise, accurate summary of the following news article in 3-4 sentences:\n\n{article}"
 
 engineering:
-  concurrency_limit: 5
-  max_retries: 5
-  retry_base_delay: 1.0
+  concurrency_limit: 2
+  max_retries: 2
+  retry_base_delay: 0.5
   request_timeout_seconds: 120
 
 # These top-level aliases keep existing experiment entry points compatible.
-concurrency_limit: 5
-max_retries: 5
-retry_base_delay: 1.0
+concurrency_limit: 2
+max_retries: 2
+retry_base_delay: 0.5
 
 data:
   summeval_path: data/summeval.json
@@ -60,7 +60,7 @@ experiments:
   seed: 42
 
 bootstrap:
-  n_resamples: 1000
+  n_resamples: 100
   confidence_level: 0.95
   random_seed: 42
 
@@ -87,9 +87,9 @@ unified_score:
       - ridge
 
 bertscore:
-  preferred_model: roberta-large
+  preferred_model: distilbert-base-uncased
   fallback_model: distilbert-base-uncased
-  batch_size: 16
+  batch_size: 4
 
 results:
   real_dir: results
@@ -103,3 +103,9 @@ figures_dpi: 300
 cost_estimate:
   average_input_tokens_per_record: 500
   average_output_tokens_per_record: 5
+
+quick_run:
+  n_documents: 10
+  n_systems_per_document: 2
+  ablation: no_cot
+  human_rating_samples: 160

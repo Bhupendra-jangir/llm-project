@@ -1,0 +1,302 @@
+[
+  {
+    "metric": "rouge1_ref",
+    "human_dim": "human_relevance",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": -0.28604266369280673,
+        "std_error": 0.41440970995759563,
+        "t_stat": -0.690241219787239,
+        "p_value": 0.5074499353083868,
+        "overrated": false,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": 0.28604266369280673,
+        "std_error": 0.36765413612886394,
+        "t_stat": 0.7780210681284104,
+        "p_value": 0.45652170914720647,
+        "overrated": true,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": 0.5479284295505887,
+      "spearman_human_length": 0.4128946803043746,
+      "partial_spearman_metric_length_given_human": 0.4773157044248534,
+      "partial_p_value": 0.038772179388539975
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": -0.05925775397547774,
+      "residual_vs_coverage_p": 0.8040086195957735,
+      "residual_vs_density_rho": -0.08421052631578946,
+      "residual_vs_density_p": 0.7241036435108112
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": -0.28604266369280673,
+        "std": 1.3104785679557622,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": 0.28604266369280673,
+        "std": 1.1626244613488108,
+        "n": 10
+      }
+    ]
+  },
+  {
+    "metric": "bertscore_F1_ref",
+    "human_dim": "human_consistency",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": 0.07527159429540409,
+        "std_error": 0.48991876544377505,
+        "t_stat": 0.15364096990084072,
+        "p_value": 0.8812826589273519,
+        "overrated": true,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": -0.07527159429540471,
+        "std_error": 0.35282657027624365,
+        "t_stat": -0.21333879202031533,
+        "p_value": 0.83581706359816,
+        "overrated": false,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": 0.5192489800699793,
+      "spearman_human_length": 0.4642070825485276,
+      "partial_spearman_metric_length_given_human": 0.4780083103253768,
+      "partial_p_value": 0.038450281153797033
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": -0.10699316690016815,
+      "residual_vs_coverage_p": 0.6534525466815119,
+      "residual_vs_density_rho": -0.06616541353383458,
+      "residual_vs_density_p": 0.781663912108574
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": 0.07527159429540409,
+        "std": 1.5492591672601221,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": -0.07527159429540471,
+        "std": 1.115735581098394,
+        "n": 10
+      }
+    ]
+  },
+  {
+    "metric": "geval_coherence",
+    "human_dim": "human_coherence",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": -0.8236748371506714,
+        "std_error": 0.20815076299102953,
+        "t_stat": -3.957106980127517,
+        "p_value": 0.003318782768120298,
+        "overrated": false,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": 0.8236748371506716,
+        "std_error": 0.16772294088297315,
+        "t_stat": 4.910925320140799,
+        "p_value": 0.0008349765029543649,
+        "overrated": true,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": NaN,
+      "spearman_human_length": 0.33499544844815726,
+      "partial_spearman_metric_length_given_human": NaN,
+      "partial_p_value": NaN
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": NaN,
+      "residual_vs_coverage_p": NaN,
+      "residual_vs_density_rho": NaN,
+      "residual_vs_density_p": NaN
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": -0.8236748371506714,
+        "std": 0.6582305077535358,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": 0.8236748371506716,
+        "std": 0.5303865090519678,
+        "n": 10
+      }
+    ]
+  },
+  {
+    "metric": "geval_consistency",
+    "human_dim": "human_consistency",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": 8.881784197001252e-16,
+        "std_error": 0.3333333333333333,
+        "t_stat": 2.6645352591003753e-15,
+        "p_value": 0.9999999999999979,
+        "overrated": true,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": 8.992806499463768e-16,
+        "std_error": 0.33333333333333326,
+        "t_stat": 2.6978419498391305e-15,
+        "p_value": 0.9999999999999979,
+        "overrated": true,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": NaN,
+      "spearman_human_length": 0.4642070825485276,
+      "partial_spearman_metric_length_given_human": NaN,
+      "partial_p_value": NaN
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": NaN,
+      "residual_vs_coverage_p": NaN,
+      "residual_vs_density_rho": NaN,
+      "residual_vs_density_p": NaN
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": 8.881784197001252e-16,
+        "std": 1.0540925533894598,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": 8.992806499463768e-16,
+        "std": 1.0540925533894596,
+        "n": 10
+      }
+    ]
+  },
+  {
+    "metric": "geval_fluency",
+    "human_dim": "human_fluency",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": -0.23287321641631148,
+        "std_error": 0.19390570272006133,
+        "t_stat": -1.2009611535381552,
+        "p_value": 0.26041825024042387,
+        "overrated": false,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": 0.23287321641631084,
+        "std_error": 0.4154175056796069,
+        "t_stat": 0.5605763195639512,
+        "p_value": 0.5887672449717788,
+        "overrated": true,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": NaN,
+      "spearman_human_length": 0.45228246288078444,
+      "partial_spearman_metric_length_given_human": NaN,
+      "partial_p_value": NaN
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": -0.387414622968842,
+      "residual_vs_coverage_p": 0.09147657523242189,
+      "residual_vs_density_rho": -0.07137990380944825,
+      "residual_vs_density_p": 0.7649036638991613
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": -0.23287321641631148,
+        "std": 0.613183671890901,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": 0.23287321641631084,
+        "std": 1.3136654978534918,
+        "n": 10
+      }
+    ]
+  },
+  {
+    "metric": "geval_relevance",
+    "human_dim": "human_relevance",
+    "system_bias": [
+      {
+        "system_id": "M0",
+        "bias": -0.36391048579502583,
+        "std_error": 0.3136216056695354,
+        "t_stat": -1.1603489020411435,
+        "p_value": 0.2757603767282206,
+        "overrated": false,
+        "n": 10
+      },
+      {
+        "system_id": "M9",
+        "bias": 0.3639104857950254,
+        "std_error": 0.3073021880046882,
+        "t_stat": 1.1842105263157887,
+        "p_value": 0.26666045196447036,
+        "overrated": true,
+        "n": 10
+      }
+    ],
+    "length_bias": {
+      "spearman_metric_length": NaN,
+      "spearman_human_length": 0.4128946803043746,
+      "partial_spearman_metric_length_given_human": NaN,
+      "partial_p_value": NaN
+    },
+    "extractiveness_bias": {
+      "residual_vs_coverage_rho": NaN,
+      "residual_vs_coverage_p": NaN,
+      "residual_vs_density_rho": NaN,
+      "residual_vs_density_p": NaN
+    },
+    "system_type_bias": [
+      {
+        "system_type": "extractive",
+        "mean_bias": -0.36391048579502583,
+        "std": 0.9917585973549086,
+        "n": 10
+      },
+      {
+        "system_type": "neural_abstractive",
+        "mean_bias": 0.3639104857950254,
+        "std": 0.971774844048089,
+        "n": 10
+      }
+    ]
+  }
+]

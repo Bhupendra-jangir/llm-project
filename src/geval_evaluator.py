@@ -233,6 +233,8 @@ class GEvalEvaluator:
 
     async def setup_cot(self) -> None:
         """Pre-generate or load auto-CoT steps for all dimensions."""
+        if self.ablation in ("no_cot", "no_description"):
+            return
         for dim in self.dimensions:
             self._cot_cache[dim] = await generate_auto_cot(dim, self.client)
         logger.info("Auto-CoT ready for all dimensions.")
@@ -281,6 +283,7 @@ class GEvalEvaluator:
                 prompt, allowed_scores=allowed_scores,
                 temperature=1.0, max_tokens=5, top_p=1.0,
                 min_score=min_s, max_score=max_s,
+                n_samples=self.n_samples,
             )
         else:
             resp = await self.client.sample_n(
