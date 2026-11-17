@@ -1,0 +1,43 @@
+<USER_REQUEST>
+# ROLE
+You are a senior ML research engineer. Build the complete, runnable project described below end to end, without stopping to ask me questions. Where something is ambiguous, make a sensible decision, record it in docs/DECISIONS.md, and continue. Work in phases, run and test each phase, and fix errors before moving on.
+
+# PROJECT
+"Enhanced LLM Evaluation Framework: G-Eval Baseline + Multi-Metric Evaluation + Human Alignment + Bias Analysis"
+It extends the EMNLP 2023 paper "G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment" (Liu et al.). It is NOT a plain reproduction. Official reference code: https://github.com/nlpyang/geval
+
+Final research question:
+"Can a multi-metric LLM evaluation framework, combining G-Eval with traditional metrics and human-alignment analysis, provide more reliable model rankings than any single automatic evaluation metric?"
+
+# INPUT DATA
+File: data/summeval.json (JSON list, 1600 records = 100 articles x 16 summarization systems).
+Schema per record:
+{ "doc_id": str, "system_id": str ("M0".."M23", 16 unique), "source": str (news article),
+  "reference": str (reference summary), "system_output": str (candidate summary),
+  "scores": {"coherence": float, "consistency": float, "fluency": float,
+             "relevance": float, "overall": float} }   # expert human ratings, 1-5, averaged
+Treat scores.* as the HUMAN GROUND TRUTH. Never feed them to any evaluator.
+
+# G-EVAL SPECIFICATION (implement faithfully, from the paper)
+1. Prompt = Task Introduction + Evaluation Criteria + Evaluation Steps (CoT) + Input Context (article) + Input Target (summary) + Evaluation Form ("scores ONLY"). Write one prompt file per dimension in prompts/ (coherence, consistency, fluency, relevance).
+   - Coherence (1-5): collective quality of all sentences; well-structured, builds from sentence to sentence (DUC alignment).
+   - Consistency (1-5): factual alignment with the source; penalize hallucinated facts.
+   - Fluency (1-3 in the paper; use 1-3 as in the paper): grammar, spelling, punc
+<truncated 9399 bytes>
+ace layout already in place:
+- data/summeval.json
+- docs/ contains the G-Eval paper PDF and my project report PDF (read them)
+- reference/geval/ is a clone of the official nlpyang/geval repo. Copy the ORIGINAL prompts and the scoring logic from it into prompts/ and src/geval_evaluator.py wherever possible, and note in DECISIONS.md any place where you deviate from it.
+
+API keys: there is NO .env file yet. I will add it later.
+1. Create .env.example listing the variable names for every supported provider (OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, OLLAMA_HOST). Do not create a real .env and do not ask me for keys.
+2. Build a MockLLMClient (deterministic fake scores and logprobs) so the entire pipeline, tests, and dashboard can be run and verified end to end with no key. Use it for unit tests and for `make smoke`. Mock outputs must never be written to results/ as real results; write them to results/_mock/ and label any figure from them "MOCK DATA".
+3. Complete Phases 0 and 1 fully with real data (no key needed). For Phases 2 onward, build and test all the code against the mock client. Then, when the code is finished, check whether .env has a valid key. If not, STOP, and print exactly what I need to do: which variable to set, which provider/model to put in configs/config.yaml, the exact command to run the smoke test (`make smoke-real` with --limit 20), and the exact command for the full run (`make all`). This replaces any earlier instruction not to pause.
+4. Make the full run resumable, so that after I add my key, rerunning picks up from the cache without redoing anything.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-11-17T11:00:42+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Sonnet 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

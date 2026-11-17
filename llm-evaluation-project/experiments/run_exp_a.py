@@ -1,0 +1,210 @@
+"""
+experiments/run_exp_a.py
+========================
+Experiment A: G-Eval baseline on SummEval.
+Compares with paper Table 1 (G-Eval-4 avg Spearman 0.514, Kendall 0.418).
+"""
+
+from __future__ import annotations
+import argparse
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
+import numpy as np
+import pandas as pd
+from src.utils import (
+    load_summeval, records_to_dataframe, load_config, set_random_seed,
+    ensure_results_dir, save_results, DIMENSIONS, HUMAN_DIMENSIONS,
+    summary_level_correlation, pooled_correlation, system_level_correlation,
+    bootstrap_ci,
+)
+from src.llm_clients import create_client, check_api_key_available, DiskCache
+from src.geval_evaluator import GEvalEvaluator, ABLATION_MODES
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+
+async def run_geval_ablation(
+    ablation: str,
+    client,
+    records: list,
+    limit: int | None,
+    score_mode: str,
+    n_samples: int,
+    results_dir: Path,
+) -> pd.DataFrame:
+    """Run one G-Eval ablation variant."""
+    evaluator = GEvalEvaluator(
+        client=client,
+        dimensions=list(DIMENSIONS),
+        score_mode=score_mode,
+        n_samples=n_samples,
+        ablation=ablation,
+        results_dir=results_dir,
+    )
+    df = await evaluator.evaluate_dataset(records, limit=limit, show_progress=True)
+    df["ablation"] = ablation
+    return df
+
+
+def run_experiment_a(
+    limit: int | None = None,
+    mock: bool = False,
+    results_dir: Path | None = None,
+    ablations: list | None = None,
+    seed: int = 42,
+) -> None:
+    """Run Experiment A: G-Eval baseline with ablation variants."""
+    cfg = load_config()
+    set_random_seed(seed)
+
+    if results_dir is None:
+        if mock:
+            results_dir = Path(cfg["mock_results_dir"])
+        else:
+            results_dir = Path(cfg["results_dir"])
+    ensure_results_dir(results_dir)
+
+    # Check API key availability
+    if not mock and not check_api_key_available(cfg):
+        print("\n" + "=" * 60)
+        print("NO API KEY FOUND")
+        print("=" * 60)
+        print("To run real G-Eval evaluations:")
+        print("  1. Copy .env.example to .env")
+        print("  2. Set your API key (e.g., OPENAI_API_KEY=sk-...)")
+        print("  3. Update configs/config.yaml: set llm.provider and llm.model")
+        print("  4. Quick test: make smoke-real   (runs --limit 20)")
+        print("  5. Full run:   make all")
+        print("=" * 60)
+        return
+
+    llm_cfg = cfg["llm"]
+    provider = "mock" if mock else llm_cfg["provider"]
+    model = "mock-model" if mock else llm_cfg["model"]
+    cache = DiskCache(cfg["cache_db"]) if not mock else None
+
+    client = create_client(
+        provider=provider,
+        model=model,
+        cache=cache,
+        concurrency_limit=cfg.get("concurrency_limit", 5),
+        max_retries=cfg.get("max_retries", 5),
+    )
+
+    score_mode = cfg["geval"]["score_mode"]
+    n_samples = cfg["geval"]["n_samples"]
+    ablation_list = ablations or ["full", "no_probs", "no_cot"]
+
+    logger.info("=== Experiment A: G-Eval Baseline ===")
+    records = load_summeval()
+
+    # Print cost estimate
+    dummy_ev = GEvalEvaluator(client=client, score_mode=score_mode, n_samples=n_samples)
+    logger.info(dummy_ev.estimate_cost(min(limit or len(records), len(records))))
+
+    all_dfs = []
+    for ablation in ablation_list:
+        logger.info(f"Running ablation: {ablation}")
+        df = asyncio.run(run_geval_ablation(
+            ablation=ablation,
+            client=client,
+            records=records,
+            limit=limit,
+            score_mode=score_mode,
+            n_samples=n_samples,
+            results_dir=results_dir,
+        ))
+        suffix = "_mock" if mock else ""
+        fname = f"geval_scores_{ablation}{suffix}.csv"
+        save_results(df, results_dir / fname)
+        all_dfs.append(df)
+
+    all_scores = pd.concat(all_dfs, ignore_index=True)
+    human_df = records_to_dataframe(records)
+    if limit:
+        human_df = human_df.iloc[:limit]
+
+    # Compute correlations
+    corr_rows = []
+    for ablation in ablation_list:
+        abl_df = all_scores[all_scores["ablation"] == ablation]
+        for dim in list(DIMENSIONS) + ["overall"]:
+            dim_df = abl_df[abl_df["dimension"] == dim].copy()
+            if len(dim_df) == 0:
+                continue
+            merged = dim_df.merge(
+                human_df[["doc_id", "system_id"] + [f"human_{d}" for d in HUMAN_DIMENSIONS]],
+                on=["doc_id", "system_id"],
+                how="left",
+            )
+            pred = merged["weighted_score"].values.astype(float)
+            for human_dim in HUMAN_DIMENSIONS:
+                human = merged[f"human_{human_dim}"].values.astype(float)
+                valid = ~(np.isnan(pred) | np.isnan(human))
+                if valid.sum() < 10:
+                    continue
+                p, h = pred[valid], human[valid]
+                d_ids = merged["doc_id"].values[valid]
+                s_ids = merged["system_id"].values[valid]
+
+                sum_corr = summary_level_correlation(p, h, d_ids)
+                samp_corr = pooled_correlation(p, h)
+                sys_corr = system_level_correlation(p, h, s_ids)
+
+                corr_rows.append({
+                    "ablation": ablation,
+                    "geval_dim": dim,
+                    "human_dim": human_dim,
+                    "summary_spearman": sum_corr["spearman"],
+                    "summary_kendall": sum_corr["kendall"],
+                    "summary_pearson": sum_corr["pearson"],
+                    "summary_n_docs": sum_corr["n_docs"],
+                    "sample_spearman": samp_corr["spearman"],
+                    "sample_kendall": samp_corr["kendall"],
+                    "system_spearman": sys_corr["spearman"],
+                    "system_kendall": sys_corr["kendall"],
+                })
+
+    corr_df = pd.DataFrame(corr_rows)
+    suffix = "_mock" if mock else ""
+    save_results(corr_df, results_dir / f"exp_a_correlations{suffix}.csv")
+
+    # Print comparison with paper
+    print("\n=== Experiment A: Summary-Level Correlations (Full G-Eval) ===")
+    full_corr = corr_df[
+        (corr_df["ablation"] == "full")
+        & (corr_df["geval_dim"] == corr_df["human_dim"])
+        & (corr_df["geval_dim"].isin(list(DIMENSIONS)))
+    ]
+    if not full_corr.empty:
+        print(full_corr[["geval_dim", "summary_spearman", "summary_kendall"]].to_string(index=False))
+        avg_spearman = full_corr["summary_spearman"].mean()
+        avg_kendall = full_corr["summary_kendall"].mean()
+        print(f"\nOur avg Spearman: {avg_spearman:.4f} (paper: 0.514)")
+        print(f"Our avg Kendall:  {avg_kendall:.4f} (paper: 0.418)")
+        if mock:
+            print("[NOTE: These are MOCK DATA results, not real G-Eval scores]")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Experiment A: G-Eval Baseline")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--results-dir", type=Path, default=None)
+    parser.add_argument("--ablation", nargs="+", default=None, choices=list(ABLATION_MODES.keys()))
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+    run_experiment_a(
+        limit=args.limit,
+        mock=args.mock,
+        results_dir=args.results_dir,
+        ablations=args.ablation,
+        seed=args.seed,
+    )

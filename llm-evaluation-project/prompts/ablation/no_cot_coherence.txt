@@ -1,0 +1,22 @@
+You will be given one summary written for a news article.
+
+Your task is to rate the summary on one metric.
+
+Please make sure you read and understand these instructions carefully.
+
+Evaluation Criteria:
+
+Coherence (1-5) - the collective quality of all sentences. The summary should be well-structured and well-organized, building from sentence to a coherent body of information about a topic.
+
+Source Text:
+
+{{Document}}
+
+Summary:
+
+{{Summary}}
+
+
+Evaluation Form (scores ONLY):
+
+- Coherence:
