@@ -8,7 +8,13 @@ import pytest
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.traditional_metrics import compute_rouge, compute_bleu
+from src.traditional_metrics import (
+    compute_rouge,
+    compute_bleu,
+    compute_all_traditional_metrics,
+    compute_bertscore_batch,
+)
+from src.utils import load_summeval
 
 
 class TestROUGE:
@@ -41,3 +47,41 @@ class TestBLEU:
     def test_range(self):
         score = compute_bleu("the quick brown fox", "the quick brown dog")
         assert 0.0 <= score <= 1.0
+
+
+def test_bertscore_requires_paired_inputs():
+    with pytest.raises(ValueError, match="same length"):
+        compute_bertscore_batch(["summary"], [])
+
+
+def test_metric_cache_respects_requested_records(tmp_path, monkeypatch):
+    import src.traditional_metrics as metrics
+
+    calls = []
+
+    def fake_bertscore(hypotheses, references, **kwargs):
+        calls.append(len(hypotheses))
+        values = [0.5] * len(hypotheses)
+        return values, values, values
+
+    monkeypatch.setattr(metrics, "_get_bertscore_model", lambda *_args: "test-model")
+    monkeypatch.setattr(metrics, "compute_bertscore_batch", fake_bertscore)
+
+    records = load_summeval(limit=3)
+    cache_path = tmp_path / "traditional_metrics.csv"
+    full = compute_all_traditional_metrics(
+        records,
+        output_path=cache_path,
+        results_dir=tmp_path,
+    )
+    subset = compute_all_traditional_metrics(
+        records,
+        limit=2,
+        output_path=cache_path,
+        results_dir=tmp_path,
+    )
+
+    assert len(full) == 3
+    assert len(subset) == 2
+    assert calls == [3, 3]
+    assert subset["doc_id"].tolist() == [record["doc_id"] for record in records[:2]]

@@ -13,7 +13,8 @@ from src.utils import (
     parse_score, summary_level_correlation, pooled_correlation,
     bootstrap_ci, z_score_normalize,
     minmax_normalize, DiskCache, load_summeval,
-    validate_summeval, normalize_summeval_record, records_to_dataframe, CostTracker
+    validate_summeval, normalize_summeval_record, records_to_dataframe, CostTracker,
+    bootstrap_summary_level_ci,
 )
 
 
@@ -88,6 +89,15 @@ class TestCorrelations:
             return summary_level_correlation(p, h, d)["spearman"]
         point, lo, hi = bootstrap_ci(pred, human, doc_ids, _spearman, n_resamples=50)
         assert lo <= point <= hi
+
+    def test_fast_summary_bootstrap_matches_point_estimate(self, sample_data):
+        pred, human, doc_ids, _ = sample_data
+        point, lower, upper = bootstrap_summary_level_ci(
+            pred, human, doc_ids, n_resamples=100
+        )
+        expected = summary_level_correlation(pred, human, doc_ids)["spearman"]
+        assert point == pytest.approx(expected)
+        assert lower <= point <= upper
 
     def test_bootstrap_rejects_misaligned_inputs(self):
         with pytest.raises(ValueError, match="equal lengths"):

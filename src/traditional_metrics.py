@@ -20,12 +20,10 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from src.utils import (
-    PROJECT_ROOT,
     RESULTS_DIR,
     ensure_results_dir,
     records_to_dataframe,
@@ -54,8 +52,7 @@ def compute_rouge(
             "rougeL": scores["rougeL"].fmeasure,
         }
     except ImportError:
-        logger.error("rouge-score not installed. Run: pip install rouge-score")
-        return {"rouge1": float("nan"), "rouge2": float("nan"), "rougeL": float("nan")}
+        raise RuntimeError("rouge-score is required; install the pinned requirements.") from None
 
 
 # ---------------------------------------------------------------------------
@@ -69,36 +66,30 @@ def compute_bleu(hypothesis: str, reference: str) -> float:
         bleu = sacrebleu.sentence_bleu(hypothesis, [reference])
         return float(bleu.score) / 100.0  # normalize to [0, 1]
     except ImportError:
-        logger.error("sacrebleu not installed. Run: pip install sacrebleu")
-        return float("nan")
+        raise RuntimeError("sacrebleu is required; install the pinned requirements.") from None
 
 
 # ---------------------------------------------------------------------------
 # BERTScore
 # ---------------------------------------------------------------------------
 
-_BERTSCORE_MODEL: Optional[str] = None
-
-
-def _get_bertscore_model(preferred: str = "roberta-large") -> str:
+def _get_bertscore_model(
+    preferred: str = "roberta-large",
+    fallback: str = "distilbert-base-uncased",
+) -> str:
     """Determine the best BERTScore model available."""
-    global _BERTSCORE_MODEL
-    if _BERTSCORE_MODEL is not None:
-        return _BERTSCORE_MODEL
-
     import torch
     if torch.cuda.is_available():
-        _BERTSCORE_MODEL = preferred
+        model = preferred
     else:
-        # CPU fallback: distilbert is much faster
         logger.warning(
-            f"No GPU detected. Using distilbert-base-uncased instead of {preferred} "
-            f"for BERTScore to avoid OOM. Set BERTSCORE_MODEL env var to override."
+            "No GPU detected. Using %s instead of %s for CPU-based BERTScore.",
+            fallback,
+            preferred,
         )
-        import os
-        _BERTSCORE_MODEL = os.getenv("BERTSCORE_MODEL", "distilbert-base-uncased")
-    logger.info(f"BERTScore model: {_BERTSCORE_MODEL}")
-    return _BERTSCORE_MODEL
+        model = fallback
+    logger.info("BERTScore model: %s", model)
+    return model
 
 
 def compute_bertscore_batch(
@@ -113,30 +104,28 @@ def compute_bertscore_batch(
     Returns:
         Tuple of (precision, recall, f1) lists.
     """
+    if len(hypotheses) != len(references):
+        raise ValueError("Hypotheses and references must have the same length")
+    if not hypotheses:
+        return [], [], []
+
     try:
         from bert_score import score as bert_score_fn
-        if model_type is None:
-            model_type = _get_bertscore_model()
+    except ImportError as exc:
+        raise RuntimeError("bert-score is required; install the pinned requirements.") from exc
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            P, R, F = bert_score_fn(
-                hypotheses,
-                references,
-                model_type=model_type,
-                lang=lang,
-                batch_size=batch_size,
-                verbose=False,
-            )
-        return P.tolist(), R.tolist(), F.tolist()
-    except ImportError:
-        logger.error("bert-score not installed. Run: pip install bert-score")
-        nan_list = [float("nan")] * len(hypotheses)
-        return nan_list, nan_list, nan_list
-    except Exception as e:
-        logger.error(f"BERTScore computation failed: {e}")
-        nan_list = [float("nan")] * len(hypotheses)
-        return nan_list, nan_list, nan_list
+    selected_model = model_type or _get_bertscore_model()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        precision, recall, f1 = bert_score_fn(
+            hypotheses,
+            references,
+            model_type=selected_model,
+            lang=lang,
+            batch_size=batch_size,
+            verbose=False,
+        )
+    return precision.tolist(), recall.tolist(), f1.tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +136,8 @@ def compute_all_traditional_metrics(
     records: List[Dict[str, Any]],
     output_path: Optional[Path] = None,
     bertscore_model: Optional[str] = None,
+    bertscore_preferred_model: str = "roberta-large",
+    bertscore_fallback_model: str = "distilbert-base-uncased",
     bertscore_batch_size: int = 32,
     limit: Optional[int] = None,
     results_dir: Optional[Path] = None,
@@ -164,17 +155,28 @@ def compute_all_traditional_metrics(
     Returns:
         DataFrame with all metric scores.
     """
-    if limit is not None:
-        records = records[:limit]
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+    records = records[:limit] if limit is not None else records
 
     res_dir = results_dir or RESULTS_DIR
     ensure_results_dir(res_dir)
     cache_path = output_path or res_dir / "traditional_metrics.csv"
+    model = bertscore_model or _get_bertscore_model(
+        bertscore_preferred_model,
+        bertscore_fallback_model,
+    )
 
-    # Resume from cache
+    requested_pairs = [(record["doc_id"], record["system_id"]) for record in records]
     if cache_path.exists():
-        logger.info(f"Loading cached traditional metrics from {cache_path}")
-        return load_results(cache_path)
+        cached_df = load_results(cache_path)
+        required_columns = {"doc_id", "system_id", "bertscore_model", *TRADITIONAL_METRIC_COLS}
+        if required_columns.issubset(cached_df.columns) and cached_df["bertscore_model"].eq(model).all():
+            cached_pairs = set(zip(cached_df["doc_id"], cached_df["system_id"]))
+            if set(requested_pairs).issubset(cached_pairs):
+                logger.info("Loading cached traditional metrics from %s", cache_path)
+                indexed = cached_df.set_index(["doc_id", "system_id"])
+                return indexed.loc[requested_pairs].reset_index()
 
     df = records_to_dataframe(records)
     n = len(df)
@@ -217,7 +219,6 @@ def compute_all_traditional_metrics(
     refs = df["reference"].tolist()
     srcs = df["source"].tolist()
 
-    model = bertscore_model or _get_bertscore_model()
     P_ref, R_ref, F_ref = compute_bertscore_batch(hyps, refs, model_type=model,
                                                    batch_size=bertscore_batch_size)
     df["bertscore_P_ref"] = P_ref
@@ -244,6 +245,7 @@ def compute_all_traditional_metrics(
         "bertscore_P_src", "bertscore_R_src", "bertscore_F1_src",
     ]
     result_df = df[cols_to_keep].copy()
+    result_df["bertscore_model"] = model
     save_results(result_df, cache_path)
     logger.info(f"Traditional metrics saved to {cache_path}")
     return result_df

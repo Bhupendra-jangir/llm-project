@@ -20,7 +20,7 @@ import pandas as pd
 from src.utils import (
     load_summeval, load_config, set_random_seed,
     ensure_results_dir, save_results, HUMAN_DIMENSIONS, summary_level_correlation, pooled_correlation, system_level_correlation,
-    bootstrap_ci,
+    bootstrap_summary_level_ci,
 )
 from src.traditional_metrics import (
     compute_all_traditional_metrics, TRADITIONAL_METRIC_COLS
@@ -51,7 +51,12 @@ def run_experiment_b(
         limit=limit,
         results_dir=res_dir,
         output_path=res_dir / "traditional_metrics.csv",
+        bertscore_preferred_model=cfg["bertscore"]["preferred_model"],
+        bertscore_fallback_model=cfg["bertscore"]["fallback_model"],
+        bertscore_batch_size=cfg["bertscore"]["batch_size"],
     )
+    metrics_df["data_label"] = "REAL DATA"
+    save_results(metrics_df, res_dir / "traditional_metrics.csv")
     logger.info(f"Metrics DataFrame shape: {metrics_df.shape}")
 
     # Correlate each metric vs each human dimension
@@ -79,10 +84,16 @@ def run_experiment_b(
             sample_corr = pooled_correlation(p, h)
             system_corr = system_level_correlation(p, h, s)
 
-            def _spearman(pred, human, doc_ids):
-                return summary_level_correlation(pred, human, doc_ids)["spearman"]
-
-            _, lo, hi = bootstrap_ci(p, h, d, _spearman, n_resamples=1000, seed=seed)
+            bootstrap_cfg = cfg.get("bootstrap", {})
+            _, lo, hi = bootstrap_summary_level_ci(
+                p,
+                h,
+                d,
+                statistic="spearman",
+                n_resamples=bootstrap_cfg.get("n_resamples", 1000),
+                confidence=bootstrap_cfg.get("confidence_level", 0.95),
+                seed=seed,
+            )
 
             rows.append({
                 "metric": metric_col,
@@ -95,11 +106,14 @@ def run_experiment_b(
                 "summary_n_docs": summary_corr["n_docs"],
                 "sample_spearman": sample_corr["spearman"],
                 "sample_kendall": sample_corr["kendall"],
+                "sample_pearson": sample_corr["pearson"],
                 "system_spearman": system_corr["spearman"],
                 "system_kendall": system_corr["kendall"],
+                "system_pearson": system_corr["pearson"],
             })
 
     corr_df = pd.DataFrame(rows)
+    corr_df["data_label"] = "REAL DATA"
     out_path = res_dir / "exp_b_correlations.csv"
     save_results(corr_df, out_path)
     logger.info(f"Saved correlations to {out_path}")

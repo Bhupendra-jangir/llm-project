@@ -468,6 +468,74 @@ def bootstrap_ci(
     return float(point), lower, upper
 
 
+def bootstrap_summary_level_ci(
+    pred: np.ndarray,
+    human: np.ndarray,
+    doc_ids: np.ndarray,
+    statistic: str = "spearman",
+    n_resamples: int = 1000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> Tuple[float, float, float]:
+    """Bootstrap summary-level correlations by resampling document scores."""
+    if not (len(pred) == len(human) == len(doc_ids)):
+        raise ValueError("pred, human, and doc_ids must have equal lengths")
+    if statistic not in {"spearman", "pearson", "kendall"}:
+        raise ValueError(f"Unsupported summary-level statistic: {statistic}")
+    if n_resamples <= 0:
+        raise ValueError("n_resamples must be positive")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be between 0 and 1")
+
+    correlation = {
+        "spearman": stats.spearmanr,
+        "pearson": stats.pearsonr,
+        "kendall": stats.kendalltau,
+    }[statistic]
+    unique_docs = np.unique(doc_ids)
+    if not len(unique_docs):
+        return float("nan"), float("nan"), float("nan")
+
+    per_document = np.full(len(unique_docs), np.nan)
+    for index, doc_id in enumerate(unique_docs):
+        mask = doc_ids == doc_id
+        document_pred = pred[mask]
+        document_human = human[mask]
+        if (
+            len(document_pred) >= 2
+            and np.std(document_pred) > 0
+            and np.std(document_human) > 0
+        ):
+            per_document[index] = float(
+                correlation(document_pred, document_human).statistic
+            )
+
+    finite_documents = per_document[np.isfinite(per_document)]
+    if not len(finite_documents):
+        return float("nan"), float("nan"), float("nan")
+    point = float(np.mean(finite_documents))
+
+    rng = np.random.default_rng(seed)
+    sampled = per_document[
+        rng.integers(0, len(unique_docs), size=(n_resamples, len(unique_docs)))
+    ]
+    finite_counts = np.isfinite(sampled).sum(axis=1)
+    estimates = np.divide(
+        np.nansum(sampled, axis=1),
+        finite_counts,
+        out=np.full(n_resamples, np.nan),
+        where=finite_counts > 0,
+    )
+    estimates = estimates[np.isfinite(estimates)]
+    if not len(estimates):
+        return point, float("nan"), float("nan")
+    alpha = 1 - confidence
+    lower, upper = np.nanpercentile(
+        estimates, [100 * alpha / 2, 100 * (1 - alpha / 2)]
+    )
+    return point, float(lower), float(upper)
+
+
 # ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
