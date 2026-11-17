@@ -8,7 +8,7 @@ excluded from Git; they are reproducible from the committed code and config.
 | 0 | Root scaffold, config, data normalization/validation, portable Makefile, baseline tests | Complete | 62 tests pass after subsequent phases; dataset validation confirms 1,600 records, 100 documents, and 16 systems. |
 | 1 | Traditional ROUGE, BLEU, reference/source BERTScore, Exp B correlations | Complete | Full Exp B ran from the cached BERTScore results on CPU (`distilbert-base-uncased`), generated a 1,600-row metric table and 65 metric/dimension correlation rows; 95% document-bootstrap CIs use 1,000 resamples. |
 | 2 | LLM adapters, G-Eval, caching/resume, mock smoke | Complete | `run_exp_a.py --limit 20 --mock` wrote all four dimensions and three configured ablations under `results/_mock/`; no prompt files were changed. |
-| 3 | Experiments A, C, E and correlation figures | In progress | Mock correlation and ranking outputs verified; phase commit remains. |
+| 3 | Experiments A, C, E and correlation figures | Complete | Mock correlation and ranking outputs verified by `make smoke`; Experiment A reports all three correlation levels and summary-level bootstrap CIs. |
 | 4 | Experiments D, F, G | In progress | Mock analysis outputs verified; phase commit remains. |
 | 5 | Dashboard, master runner, methodology and final report | In progress | Dashboard and report verified; phase commit remains. |
 

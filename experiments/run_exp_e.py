@@ -22,7 +22,7 @@ from src.utils import (
     load_summeval, records_to_dataframe, load_config, set_random_seed,
     ensure_results_dir, save_results, DIMENSIONS, HUMAN_DIMENSIONS,
     summary_level_correlation, pooled_correlation, system_level_correlation,
-    top_k_overlap, bootstrap_ci,
+    top_k_overlap, bootstrap_summary_level_ci,
 )
 from src.traditional_metrics import compute_all_traditional_metrics, TRADITIONAL_METRIC_COLS
 
@@ -112,9 +112,16 @@ def run_experiment_e(
             samp_corr = pooled_correlation(p, h)
             sys_corr = system_level_correlation(p, h, s)
 
-            def _spearman_fn(pred, human, doc_ids):
-                return summary_level_correlation(pred, human, doc_ids)["spearman"]
-            _, lo, hi = bootstrap_ci(p, h, d, _spearman_fn, n_resamples=1000, seed=seed)
+            bootstrap_cfg = cfg.get("bootstrap", {})
+            _, lo, hi = bootstrap_summary_level_ci(
+                p,
+                h,
+                d,
+                statistic="spearman",
+                n_resamples=bootstrap_cfg.get("n_resamples", 1000),
+                confidence=bootstrap_cfg.get("confidence_level", 0.95),
+                seed=seed,
+            )
             topk = top_k_overlap(p, h, s, k=5)
 
             corr_rows.append({
@@ -125,12 +132,15 @@ def run_experiment_e(
                 "summary_pearson": sum_corr["pearson"],
                 "sample_spearman": samp_corr["spearman"],
                 "sample_kendall": samp_corr["kendall"],
+                "sample_pearson": samp_corr["pearson"],
                 "system_spearman": sys_corr["spearman"],
                 "system_kendall": sys_corr["kendall"],
+                "system_pearson": sys_corr["pearson"],
                 "top5_overlap": topk,
             })
 
     corr_df = pd.DataFrame(corr_rows)
+    corr_df["data_label"] = "MOCK DATA" if mock else "REAL DATA"
     save_results(corr_df, res_dir / f"correlations{suffix}.csv")
 
     if not corr_df.empty:
