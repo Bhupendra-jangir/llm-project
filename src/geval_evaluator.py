@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -99,7 +100,9 @@ def load_or_generate_cot(dimension: str) -> str:
     """Load cached CoT steps, or return a placeholder for generation."""
     path = get_auto_cot_path(dimension)
     if path.exists():
-        return path.read_text(encoding="utf-8").strip()
+        content = path.read_text(encoding="utf-8").strip()
+        if content and not content.startswith("[Generated at runtime:"):
+            return content
     return ""  # Will be generated lazily
 
 
@@ -115,18 +118,18 @@ async def generate_auto_cot(
     """
     path = get_auto_cot_path(dimension)
     if path.exists() and not force_regenerate:
-        logger.info(f"Auto-CoT for {dimension} loaded from {path}")
-        return path.read_text(encoding="utf-8").strip()
-
-    cot_prompt = _make_cot_generation_prompt(dimension)
+        cached_steps = path.read_text(encoding="utf-8").strip()
+        if cached_steps and not cached_steps.startswith("[Generated at runtime:"):
+            logger.info(f"Auto-CoT for {dimension} loaded from {path}")
+            return cached_steps
 
     if isinstance(client, MockLLMClient):
-        cot_steps = _get_mock_cot_steps(dimension)
-    else:
-        logger.info(f"Generating auto-CoT for dimension: {dimension}")
-        resp = await client.complete(cot_prompt, temperature=0.0, max_tokens=512)
-        cot_steps = resp.text.strip()
+        return _get_mock_cot_steps(dimension)
 
+    cot_prompt = _make_cot_generation_prompt(dimension)
+    logger.info(f"Generating auto-CoT for dimension: {dimension}")
+    resp = await client.complete(cot_prompt, temperature=0.0, max_tokens=512)
+    cot_steps = resp.text.strip()
     path.write_text(cot_steps, encoding="utf-8")
     logger.info(f"Saved auto-CoT for {dimension} to {path}")
     return cot_steps
@@ -135,12 +138,13 @@ async def generate_auto_cot(
 def _make_cot_generation_prompt(dimension: str) -> str:
     """Create the prompt to ask the LLM to generate evaluation steps."""
     min_s, max_s = SCORE_RANGES[dimension]
+    template = (
+        PROMPTS_DIR / "cot_generation" / f"{dimension}.txt"
+    ).read_text(encoding="utf-8")
     return (
-        f"You are an expert NLG evaluator. For the task of rating summarization systems "
-        f"on the '{dimension}' dimension (scale {min_s}-{max_s}), please write a numbered list "
-        f"of step-by-step evaluation instructions. The steps should guide an evaluator to "
-        f"carefully assess a summary's {dimension} against the source document. "
-        f"Be specific and actionable. Output only the numbered steps, nothing else."
+        template.replace("{{Dimension}}", dimension)
+        .replace("{{MinScore}}", str(min_s))
+        .replace("{{MaxScore}}", str(max_s))
     )
 
 
@@ -263,44 +267,38 @@ class GEvalEvaluator:
                 "is_mock": self.is_mock,
             }
 
-        try:
-            if self.ablation == "no_probs":
-                resp = await self.client.complete(prompt, temperature=0.0, max_tokens=5)
-                resp.weighted_score = resp.score
-            elif self.score_mode == "logprobs":
-                resp = await self.client.complete_with_logprobs(
-                    prompt, allowed_scores=allowed_scores,
-                    temperature=1.0, max_tokens=5, top_p=1.0,
-                    min_score=min_s, max_score=max_s,
-                )
-            else:  # sampling
-                resp = await self.client.sample_n(
-                    prompt, n=self.n_samples,
-                    temperature=1.0, max_tokens=5, top_p=1.0,
-                    min_score=min_s, max_score=max_s,
-                )
+        if self.ablation == "no_probs":
+            resp = await self.client.complete(
+                prompt,
+                temperature=0.0,
+                max_tokens=5,
+                min_score=min_s,
+                max_score=max_s,
+            )
+            resp.weighted_score = resp.score
+        elif self.score_mode == "logprobs":
+            resp = await self.client.complete_with_logprobs(
+                prompt, allowed_scores=allowed_scores,
+                temperature=1.0, max_tokens=5, top_p=1.0,
+                min_score=min_s, max_score=max_s,
+            )
+        else:
+            resp = await self.client.sample_n(
+                prompt, n=self.n_samples,
+                temperature=1.0, max_tokens=5, top_p=1.0,
+                min_score=min_s, max_score=max_s,
+            )
 
-            # Parse fallback
-            if resp.score is None:
-                resp.score = parse_score(resp.text, min_score=min_s, max_score=max_s)
-                if resp.score is None:
-                    logger.warning(
-                        f"Could not parse score from: {resp.text!r} for dim={dimension}. "
-                        f"Logging NaN."
-                    )
-                    resp.score = float("nan")
-                resp.weighted_score = resp.score
-
-        except Exception as e:
-            logger.error(f"Error evaluating {dimension}: {e}")
-            return {
-                "score": float("nan"),
-                "weighted_score": float("nan"),
-                "logprob_weights": {},
-                "raw_text": f"ERROR: {e}",
-                "cached": False,
-                "is_mock": self.is_mock,
-            }
+        if resp.score is None:
+            resp.score = parse_score(resp.text, min_score=min_s, max_score=max_s)
+        if resp.weighted_score is None:
+            resp.weighted_score = resp.score
+        if resp.weighted_score is None or not math.isfinite(resp.weighted_score):
+            raise ValueError(f"Could not obtain a valid {dimension} score from {resp.text!r}")
+        if not min_s <= resp.weighted_score <= max_s:
+            raise ValueError(
+                f"{dimension} score {resp.weighted_score} is outside [{min_s}, {max_s}]"
+            )
 
         return {
             "score": resp.score,
@@ -354,12 +352,6 @@ class GEvalEvaluator:
 
         # Run with progress bar
         if show_progress:
-            results_raw = []
-            for coro in atqdm(asyncio.as_completed(tasks), total=len(tasks),
-                               desc=f"G-Eval [{self.ablation}]"):
-                results_raw.append(await coro)
-            # Note: asyncio.as_completed doesn't preserve order; we need ordered
-            # Instead use gather:
             results_raw = await atqdm.gather(*tasks, desc=f"G-Eval [{self.ablation}]")
         else:
             results_raw = await asyncio.gather(*tasks)
@@ -411,8 +403,13 @@ class GEvalEvaluator:
         avg_output_tokens: int = 5,
     ) -> str:
         """Estimate API cost for evaluating n_records."""
+        if self.client.provider == "mock":
+            return f"Mock mode: {n_records:,} records, 0 API calls, $0.00 API cost."
+
         n_calls_per_record = len(self.dimensions)
-        if self.score_mode == "sampling":
+        if self.score_mode == "sampling" or self.client.provider not in {
+            "openai",
+        }:
             n_calls_per_record *= self.n_samples
         total_calls = n_records * n_calls_per_record
         total_input = total_calls * avg_prompt_tokens

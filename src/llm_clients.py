@@ -32,7 +32,7 @@ import math
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from dotenv import load_dotenv
@@ -84,21 +84,42 @@ class BaseLLMClient(ABC):
         concurrency_limit: int = 5,
         max_retries: int = 5,
         retry_base_delay: float = 1.0,
+        requests_per_minute: int = 60,
     ) -> None:
         self.provider = provider
         self.model = model
         self.cache = cache
         self.cost_tracker = cost_tracker or CostTracker(model)
         self._semaphore = asyncio.Semaphore(concurrency_limit)
+        self._request_semaphore = asyncio.Semaphore(concurrency_limit)
+        if requests_per_minute <= 0:
+            raise ValueError("requests_per_minute must be positive")
+        self._request_interval = 60.0 / requests_per_minute
+        self._rate_limit_lock = asyncio.Lock()
+        self._next_request_time = 0.0
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
+
+    async def _rate_limited_call(
+        self,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Run one provider request within concurrency and per-minute limits."""
+        async with self._request_semaphore:
+            async with self._rate_limit_lock:
+                loop = asyncio.get_running_loop()
+                delay = self._next_request_time - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._next_request_time = max(loop.time(), self._next_request_time) + self._request_interval
+            return await operation()
 
     def _cache_key(self, prompt: str, **kwargs: Any) -> str:
         return DiskCache.make_key(
             provider=self.provider,
             model=self.model,
             prompt=prompt,
-            **{k: v for k, v in kwargs.items() if isinstance(v, (str, int, float, bool))},
+            params=kwargs,
         )
 
     async def complete(
@@ -110,7 +131,14 @@ class BaseLLMClient(ABC):
         **kwargs: Any,
     ) -> LLMResponse:
         """Generate a completion (single response)."""
-        key = self._cache_key(prompt, temperature=temperature, max_tokens=max_tokens, top_p=top_p)
+        key = self._cache_key(
+            prompt,
+            mode="complete",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            **kwargs,
+        )
         if self.cache and key in self.cache:
             cached = self.cache.get(key)
             resp = LLMResponse(**cached, cached=True)
@@ -150,9 +178,11 @@ class BaseLLMClient(ABC):
         key = self._cache_key(
             prompt,
             mode="logprobs",
+            allowed_scores=list(allowed_scores),
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
+            **kwargs,
         )
         if self.cache and key in self.cache:
             cached = self.cache.get(key)
@@ -195,7 +225,13 @@ class BaseLLMClient(ABC):
     ) -> LLMResponse:
         """Sample n completions and return frequency-weighted score."""
         key = self._cache_key(
-            prompt, mode="sampling", n=n, temperature=temperature, max_tokens=max_tokens
+            prompt,
+            mode="sampling",
+            n=n,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            **kwargs,
         )
         if self.cache and key in self.cache:
             cached = self.cache.get(key)
@@ -271,6 +307,10 @@ class BaseLLMClient(ABC):
         logprobs: Dict[str, float], allowed_scores: Sequence[int]
     ) -> Tuple[float, Dict[str, float]]:
         """Compute probability-weighted score from token logprobs."""
+        if not allowed_scores:
+            raise ValueError("allowed_scores must not be empty")
+        if not logprobs:
+            raise ValueError("Cannot calculate a weighted score without logprobs")
         # Convert logprobs to probabilities
         weights: Dict[str, float] = {}
         for score_val in allowed_scores:
@@ -280,7 +320,7 @@ class BaseLLMClient(ABC):
 
         total = sum(weights.values())
         if total == 0:
-            return float(np.mean(allowed_scores)), {}
+            raise ValueError("Logprob weights underflowed to zero")
         norm = {k: v / total for k, v in weights.items()}
         weighted = sum(float(k) * v for k, v in norm.items())
         return weighted, norm
@@ -291,6 +331,8 @@ class BaseLLMClient(ABC):
     ) -> Tuple[float, Dict[str, float]]:
         """Compute frequency-weighted score from sampled texts."""
         counts: Dict[str, int] = {str(s): 0 for s in allowed_scores}
+        if not counts:
+            raise ValueError("allowed_scores must not be empty")
         total = 0
         for text in texts:
             score = parse_score(text, min_score=min_score, max_score=max_score)
@@ -301,7 +343,7 @@ class BaseLLMClient(ABC):
                     total += 1
 
         if total == 0:
-            return float(np.mean(allowed_scores)), {}
+            raise ValueError("No sampled completion contained a valid score")
 
         weights = {k: v / total for k, v in counts.items()}
         weighted = sum(float(k) * v for k, v in weights.items())
@@ -330,8 +372,9 @@ class MockLLMClient(BaseLLMClient):
 
     def _prompt_seed(self, prompt: str) -> int:
         """Generate a deterministic integer seed from a prompt."""
-        h = hashlib.md5(prompt.encode()).hexdigest()
-        return int(h[:8], 16) ^ self.seed
+        payload = f"{self.provider}\0{self.model}\0{self.seed}\0{prompt}"
+        digest = hashlib.sha256(payload.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big")
 
     def _mock_score(self, prompt: str, min_s: float = 1.0, max_s: float = 5.0) -> float:
         rng = np.random.default_rng(self._prompt_seed(prompt))
@@ -346,7 +389,9 @@ class MockLLMClient(BaseLLMClient):
 
     async def _complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
         await asyncio.sleep(0.001)  # Simulate minimal latency
-        score = self._mock_score(prompt)
+        min_score = float(kwargs.get("min_score", 1))
+        max_score = float(kwargs.get("max_score", 5))
+        score = self._mock_score(prompt, min_score, max_score)
         return LLMResponse(
             text=f"{score:.1f}",
             score=score,
@@ -417,15 +462,21 @@ class OpenAIClient(BaseLLMClient):
 
     async def _complete(self, prompt: str, temperature: float = 1.0,
                         max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any) -> LLMResponse:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
+        resp = await self._rate_limited_call(
+            lambda: self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+            )
         )
         text = resp.choices[0].message.content or ""
-        score = parse_score(text)
+        score = parse_score(
+            text,
+            min_score=float(kwargs.get("min_score", 1)),
+            max_score=float(kwargs.get("max_score", 5)),
+        )
         usage = resp.usage
         return LLMResponse(
             text=text, score=score, weighted_score=score,
@@ -438,15 +489,31 @@ class OpenAIClient(BaseLLMClient):
         self, prompt: str, allowed_scores: Sequence[int],
         temperature: float = 1.0, max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any
     ) -> LLMResponse:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            logprobs=True,
-            top_logprobs=10,
-        )
+        try:
+            resp = await self._rate_limited_call(
+                lambda: self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    logprobs=True,
+                    top_logprobs=10,
+                )
+            )
+        except Exception as exc:
+            if exc.__class__.__name__ != "BadRequestError":
+                raise
+            logger.warning("Logprobs unavailable (%s); falling back to n=20 sampling.", exc)
+            return await self._sample_n(
+                prompt,
+                n=20,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                min_score=min(allowed_scores),
+                max_score=max(allowed_scores),
+            )
         text = resp.choices[0].message.content or ""
         # Extract logprobs for score tokens
         logprob_data: Dict[str, float] = {}
@@ -458,17 +525,28 @@ class OpenAIClient(BaseLLMClient):
                         if t not in logprob_data:
                             logprob_data[t] = top_lp.logprob
 
-        if logprob_data:
-            weighted, weights = self._weighted_score_from_logprobs(logprob_data, allowed_scores)
-        else:
-            # Fall back to parsing the text
-            score = parse_score(text, min_score=min(allowed_scores), max_score=max(allowed_scores))
-            weighted = score or float(np.mean(allowed_scores))
-            weights = {}
+        if not logprob_data:
+            logger.warning("No score-token logprobs returned; falling back to n=20 sampling.")
+            return await self._sample_n(
+                prompt,
+                n=20,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                min_score=min(allowed_scores),
+                max_score=max(allowed_scores),
+            )
+        weighted, weights = self._weighted_score_from_logprobs(logprob_data, allowed_scores)
 
         usage = resp.usage
         return LLMResponse(
-            text=text, score=parse_score(text), weighted_score=weighted,
+            text=text,
+            score=parse_score(
+                text,
+                min_score=min(allowed_scores),
+                max_score=max(allowed_scores),
+            ),
+            weighted_score=weighted,
             logprob_weights=weights, model=self.model, provider="openai",
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
@@ -480,16 +558,18 @@ class OpenAIClient(BaseLLMClient):
     ) -> LLMResponse:
         # OpenAI deprecated n>1 for chat; loop instead
         tasks = [
-            self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
+            self._rate_limited_call(
+                lambda: self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                )
             )
             for _ in range(n)
         ]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        responses = await asyncio.gather(*tasks)
         texts = []
         total_in, total_out = 0, 0
         for r in responses:
@@ -534,11 +614,18 @@ class GeminiClient(BaseLLMClient):
         gen_config = self._genai.types.GenerationConfig(
             temperature=temperature, max_output_tokens=max_tokens, top_p=top_p
         )
-        resp = await loop.run_in_executor(
-            None, lambda: self._model.generate_content(prompt, generation_config=gen_config)
+        resp = await self._rate_limited_call(
+            lambda: loop.run_in_executor(
+                None,
+                lambda: self._model.generate_content(prompt, generation_config=gen_config),
+            )
         )
         text = resp.text if resp.text else ""
-        score = parse_score(text)
+        score = parse_score(
+            text,
+            min_score=float(kwargs.get("min_score", 1)),
+            max_score=float(kwargs.get("max_score", 5)),
+        )
         usage = resp.usage_metadata
         return LLMResponse(
             text=text, score=score, weighted_score=score,
@@ -559,24 +646,43 @@ class GeminiClient(BaseLLMClient):
         max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any
     ) -> LLMResponse:
         loop = asyncio.get_event_loop()
-        gen_config = self._genai.types.GenerationConfig(
-            temperature=temperature, max_output_tokens=max_tokens, top_p=top_p,
-            candidate_count=min(n, 8)  # Gemini caps candidates
-        )
-        resp = await loop.run_in_executor(
-            None, lambda: self._model.generate_content(prompt, generation_config=gen_config)
-        )
-        texts = [c.content.parts[0].text for c in resp.candidates if c.content.parts]
+        texts = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        remaining = n
+        while remaining:
+            batch_count = min(remaining, 8)
+            gen_config = self._genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+                top_p=top_p,
+                candidate_count=batch_count,
+            )
+            resp = await self._rate_limited_call(
+                lambda: loop.run_in_executor(
+                    None,
+                    lambda: self._model.generate_content(prompt, generation_config=gen_config),
+                )
+            )
+            texts.extend(
+                candidate.content.parts[0].text
+                for candidate in resp.candidates
+                if candidate.content.parts
+            )
+            usage = resp.usage_metadata
+            if usage:
+                total_input_tokens += usage.prompt_token_count
+                total_output_tokens += usage.candidates_token_count
+            remaining -= batch_count
         min_s = float(kwargs.get("min_score", 1))
         max_s = float(kwargs.get("max_score", 5))
         allowed = list(range(int(min_s), int(max_s) + 1))
         weighted, weights = self._weighted_score_from_samples(texts, allowed, min_s, max_s)
-        usage = resp.usage_metadata
         return LLMResponse(
             text="|".join(texts[:3]), score=round(weighted), weighted_score=weighted,
             logprob_weights=weights, model=self.model, provider="gemini",
-            input_tokens=usage.prompt_token_count if usage else 0,
-            output_tokens=usage.candidates_token_count if usage else 0,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
         )
 
 
@@ -597,14 +703,20 @@ class AnthropicClient(BaseLLMClient):
 
     async def _complete(self, prompt: str, temperature: float = 1.0,
                         max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any) -> LLMResponse:
-        resp = await self._client.messages.create(
-            model=self.model,
-            max_tokens=max(max_tokens, 10),
-            temperature=min(temperature, 1.0),
-            messages=[{"role": "user", "content": prompt}],
+        resp = await self._rate_limited_call(
+            lambda: self._client.messages.create(
+                model=self.model,
+                max_tokens=max(max_tokens, 10),
+                temperature=min(temperature, 1.0),
+                messages=[{"role": "user", "content": prompt}],
+            )
         )
         text = resp.content[0].text if resp.content else ""
-        score = parse_score(text)
+        score = parse_score(
+            text,
+            min_score=float(kwargs.get("min_score", 1)),
+            max_score=float(kwargs.get("max_score", 5)),
+        )
         return LLMResponse(
             text=text, score=score, weighted_score=score,
             model=self.model, provider="anthropic",
@@ -622,16 +734,23 @@ class AnthropicClient(BaseLLMClient):
         self, prompt: str, n: int = 20, temperature: float = 1.0,
         max_tokens: int = 5, **kwargs: Any
     ) -> LLMResponse:
-        tasks = [self._complete(prompt, temperature=temperature, max_tokens=max_tokens)
+        tasks = [
+            self._complete(
+                prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                min_score=kwargs.get("min_score", 1),
+                max_score=kwargs.get("max_score", 5),
+            )
                  for _ in range(n)]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        texts = [r.text for r in responses if isinstance(r, LLMResponse)]
+        responses = await asyncio.gather(*tasks)
+        texts = [r.text for r in responses]
         min_s = float(kwargs.get("min_score", 1))
         max_s = float(kwargs.get("max_score", 5))
         allowed = list(range(int(min_s), int(max_s) + 1))
         weighted, weights = self._weighted_score_from_samples(texts, allowed, min_s, max_s)
-        total_in = sum(r.input_tokens for r in responses if isinstance(r, LLMResponse))
-        total_out = sum(r.output_tokens for r in responses if isinstance(r, LLMResponse))
+        total_in = sum(r.input_tokens for r in responses)
+        total_out = sum(r.output_tokens for r in responses)
         return LLMResponse(
             text="|".join(texts[:3]), score=round(weighted), weighted_score=weighted,
             logprob_weights=weights, model=self.model, provider="anthropic",
@@ -666,15 +785,21 @@ class OpenAICompatibleClient(BaseLLMClient):
 
     async def _complete(self, prompt: str, temperature: float = 1.0,
                         max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any) -> LLMResponse:
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
+        resp = await self._rate_limited_call(
+            lambda: self._client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+            )
         )
         text = resp.choices[0].message.content or ""
-        score = parse_score(text)
+        score = parse_score(
+            text,
+            min_score=float(kwargs.get("min_score", 1)),
+            max_score=float(kwargs.get("max_score", 5)),
+        )
         usage = resp.usage
         return LLMResponse(
             text=text, score=score, weighted_score=score,
@@ -688,14 +813,16 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float = 1.0, max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any
     ) -> LLMResponse:
         try:
-            resp = await self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                logprobs=True,
-                top_logprobs=10,
+            resp = await self._rate_limited_call(
+                lambda: self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    logprobs=True,
+                    top_logprobs=10,
+                )
             )
             text = resp.choices[0].message.content or ""
             logprob_data: Dict[str, float] = {}
@@ -706,43 +833,65 @@ class OpenAICompatibleClient(BaseLLMClient):
                         if t in {str(s) for s in allowed_scores}:
                             if t not in logprob_data:
                                 logprob_data[t] = top_lp.logprob
-            if logprob_data:
-                weighted, weights = self._weighted_score_from_logprobs(logprob_data, allowed_scores)
-            else:
-                score = parse_score(text, min_score=min(allowed_scores), max_score=max(allowed_scores))
-                weighted = score or float(np.mean(allowed_scores))
-                weights = {}
+            if not logprob_data:
+                logger.warning("No score-token logprobs returned; falling back to n=20 sampling.")
+                return await self._sample_n(
+                    prompt,
+                    n=20,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    min_score=min(allowed_scores),
+                    max_score=max(allowed_scores),
+                )
+            weighted, weights = self._weighted_score_from_logprobs(logprob_data, allowed_scores)
             usage = resp.usage
             return LLMResponse(
-                text=text, score=parse_score(text), weighted_score=weighted,
+                text=text,
+                score=parse_score(
+                    text,
+                    min_score=min(allowed_scores),
+                    max_score=max(allowed_scores),
+                ),
+                weighted_score=weighted,
                 logprob_weights=weights, model=self.model, provider=self.provider,
                 input_tokens=usage.prompt_tokens if usage else 0,
                 output_tokens=usage.completion_tokens if usage else 0,
             )
         except Exception as e:
-            logger.warning(f"Logprobs failed ({e}); falling back to sampling.")
-            return await self._sample_n(prompt, n=20, allowed_scores=allowed_scores, **kwargs)
+            if e.__class__.__name__ != "BadRequestError":
+                raise
+            logger.warning("Logprobs failed (%s); falling back to n=20 sampling.", e)
+            return await self._sample_n(
+                prompt,
+                n=20,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                min_score=min(allowed_scores),
+                max_score=max(allowed_scores),
+            )
 
     async def _sample_n(
         self, prompt: str, n: int = 20, temperature: float = 1.0,
         max_tokens: int = 5, top_p: float = 1.0, **kwargs: Any
     ) -> LLMResponse:
         tasks = [
-            self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
+            self._rate_limited_call(
+                lambda: self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                )
             )
             for _ in range(n)
         ]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        responses = await asyncio.gather(*tasks)
         texts = []
         total_in, total_out = 0, 0
         for r in responses:
-            if isinstance(r, Exception):
-                continue
             texts.append(r.choices[0].message.content or "")
             if r.usage:
                 total_in += r.usage.prompt_tokens
@@ -795,11 +944,16 @@ class OllamaClient(BaseLLMClient):
     async def _post(self, endpoint: str, payload: Dict) -> Dict:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self._base_url}{endpoint}", json=payload, timeout=aiohttp.ClientTimeout(total=120)
-            ) as r:
-                r.raise_for_status()
-                return await r.json()
+            async def request() -> Dict:
+                async with session.post(
+                    f"{self._base_url}{endpoint}",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+
+            return await self._rate_limited_call(request)
 
     async def _complete(self, prompt: str, temperature: float = 1.0,
                         max_tokens: int = 5, **kwargs: Any) -> LLMResponse:
@@ -810,7 +964,11 @@ class OllamaClient(BaseLLMClient):
             "options": {"temperature": temperature, "num_predict": max_tokens},
         })
         text = data.get("response", "")
-        score = parse_score(text)
+        score = parse_score(
+            text,
+            min_score=float(kwargs.get("min_score", 1)),
+            max_score=float(kwargs.get("max_score", 5)),
+        )
         return LLMResponse(
             text=text, score=score, weighted_score=score,
             model=self.model, provider="ollama",
@@ -828,16 +986,23 @@ class OllamaClient(BaseLLMClient):
         self, prompt: str, n: int = 20, temperature: float = 1.0,
         max_tokens: int = 5, **kwargs: Any
     ) -> LLMResponse:
-        tasks = [self._complete(prompt, temperature=temperature, max_tokens=max_tokens)
+        tasks = [
+            self._complete(
+                prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                min_score=kwargs.get("min_score", 1),
+                max_score=kwargs.get("max_score", 5),
+            )
                  for _ in range(n)]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        texts = [r.text for r in responses if isinstance(r, LLMResponse)]
+        responses = await asyncio.gather(*tasks)
+        texts = [r.text for r in responses]
         min_s = float(kwargs.get("min_score", 1))
         max_s = float(kwargs.get("max_score", 5))
         allowed = list(range(int(min_s), int(max_s) + 1))
         weighted, weights = self._weighted_score_from_samples(texts, allowed, min_s, max_s)
-        total_in = sum(r.input_tokens for r in responses if isinstance(r, LLMResponse))
-        total_out = sum(r.output_tokens for r in responses if isinstance(r, LLMResponse))
+        total_in = sum(r.input_tokens for r in responses)
+        total_out = sum(r.output_tokens for r in responses)
         return LLMResponse(
             text="|".join(texts[:3]), score=round(weighted), weighted_score=weighted,
             logprob_weights=weights, model=self.model, provider="ollama",
@@ -857,6 +1022,7 @@ def create_client(
     concurrency_limit: int = 5,
     max_retries: int = 5,
     retry_base_delay: float = 1.0,
+    requests_per_minute: int = 60,
 ) -> BaseLLMClient:
     """Factory function to instantiate the appropriate LLM client."""
     common = dict(
@@ -865,6 +1031,7 @@ def create_client(
         concurrency_limit=concurrency_limit,
         max_retries=max_retries,
         retry_base_delay=retry_base_delay,
+        requests_per_minute=requests_per_minute,
     )
     if provider == "mock":
         return MockLLMClient(model=model, **common)
@@ -885,9 +1052,12 @@ def create_client(
                          f"Supported: mock, openai, gemini, anthropic, groq, openrouter, ollama")
 
 
-def check_api_key_available(config: Dict[str, Any]) -> bool:
-    """Check whether the configured provider has an API key in the environment."""
-    provider = config.get("llm", {}).get("provider", "mock")
+def check_api_key_available(
+    config: Dict[str, Any],
+    provider: Optional[str] = None,
+) -> bool:
+    """Check whether a configured provider has an API key in the environment."""
+    provider = provider or config.get("llm", {}).get("provider", "mock")
     env_map = {
         "openai": "OPENAI_API_KEY",
         "gemini": "GEMINI_API_KEY",

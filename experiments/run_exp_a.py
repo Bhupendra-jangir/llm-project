@@ -21,6 +21,7 @@ from src.utils import (
     load_summeval, records_to_dataframe, load_config, set_random_seed,
     ensure_results_dir, save_results, DIMENSIONS, HUMAN_DIMENSIONS,
     summary_level_correlation, pooled_correlation, system_level_correlation,
+    bootstrap_summary_level_ci,
 )
 from src.llm_clients import create_client, check_api_key_available, DiskCache
 from src.geval_evaluator import GEvalEvaluator, ABLATION_MODES
@@ -63,29 +64,28 @@ def run_experiment_a(
     cfg = load_config()
     set_random_seed(seed)
 
-    if results_dir is None:
-        if mock:
-            results_dir = Path(cfg["mock_results_dir"])
-        else:
-            results_dir = Path(cfg["results_dir"])
-    ensure_results_dir(results_dir)
-
-    # Check API key availability
-    if not mock and not check_api_key_available(cfg):
+    llm_cfg = cfg["llm"]
+    provider = "mock" if mock else llm_cfg["provider"]
+    if not mock and (provider == "mock" or not check_api_key_available(cfg)):
         print("\n" + "=" * 60)
-        print("NO API KEY FOUND")
+        print("REAL EVALUATION NOT CONFIGURED")
         print("=" * 60)
-        print("To run real G-Eval evaluations:")
+        print("Continuing in mock mode. To run real G-Eval evaluations:")
         print("  1. Copy .env.example to .env")
         print("  2. Set your API key (e.g., OPENAI_API_KEY=sk-...)")
         print("  3. Update configs/config.yaml: set llm.provider and llm.model")
         print("  4. Quick test: make smoke-real   (runs --limit 20)")
         print("  5. Full run:   make all")
         print("=" * 60)
-        return
+        provider = "mock"
 
-    llm_cfg = cfg["llm"]
-    provider = "mock" if mock else llm_cfg["provider"]
+    mock = provider == "mock"
+    if mock:
+        results_dir = Path(cfg["mock_results_dir"])
+    elif results_dir is None:
+        results_dir = Path(cfg["results_dir"])
+    ensure_results_dir(results_dir)
+
     model = "mock-model" if mock else llm_cfg["model"]
     cache = DiskCache(cfg["cache_db"]) if not mock else None
 
@@ -95,11 +95,13 @@ def run_experiment_a(
         cache=cache,
         concurrency_limit=cfg.get("concurrency_limit", 5),
         max_retries=cfg.get("max_retries", 5),
+        retry_base_delay=cfg.get("retry_base_delay", 1.0),
+        requests_per_minute=llm_cfg.get("requests_per_minute", 60),
     )
 
     score_mode = cfg["geval"]["score_mode"]
     n_samples = cfg["geval"]["n_samples"]
-    ablation_list = ablations or ["full", "no_probs", "no_cot"]
+    ablation_list = ablations or cfg["geval"]["ablations"]
 
     logger.info("=== Experiment A: G-Eval Baseline ===")
     records = load_summeval()
@@ -108,22 +110,27 @@ def run_experiment_a(
     dummy_ev = GEvalEvaluator(client=client, score_mode=score_mode, n_samples=n_samples)
     logger.info(dummy_ev.estimate_cost(min(limit or len(records), len(records))))
 
-    all_dfs = []
-    for ablation in ablation_list:
-        logger.info(f"Running ablation: {ablation}")
-        df = asyncio.run(run_geval_ablation(
-            ablation=ablation,
-            client=client,
-            records=records,
-            limit=limit,
-            score_mode=score_mode,
-            n_samples=n_samples,
-            results_dir=results_dir,
-        ))
-        suffix = "_mock" if mock else ""
-        fname = f"geval_scores_{ablation}{suffix}.csv"
-        save_results(df, results_dir / fname)
-        all_dfs.append(df)
+    async def evaluate_ablations() -> list[pd.DataFrame]:
+        frames = []
+        for ablation in ablation_list:
+            logger.info(f"Running ablation: {ablation}")
+            df = await run_geval_ablation(
+                ablation=ablation,
+                client=client,
+                records=records,
+                limit=limit,
+                score_mode=score_mode,
+                n_samples=n_samples,
+                results_dir=results_dir,
+            )
+            df["data_label"] = "MOCK DATA" if mock else "REAL DATA"
+            suffix = "_mock" if mock else ""
+            fname = f"geval_scores_{ablation}{suffix}.csv"
+            save_results(df, results_dir / fname)
+            frames.append(df)
+        return frames
+
+    all_dfs = asyncio.run(evaluate_ablations())
 
     all_scores = pd.concat(all_dfs, ignore_index=True)
     human_df = records_to_dataframe(records)
@@ -156,23 +163,38 @@ def run_experiment_a(
                 sum_corr = summary_level_correlation(p, h, d_ids)
                 samp_corr = pooled_correlation(p, h)
                 sys_corr = system_level_correlation(p, h, s_ids)
+                bootstrap_cfg = cfg.get("bootstrap", {})
+                _, ci_low, ci_high = bootstrap_summary_level_ci(
+                    p,
+                    h,
+                    d_ids,
+                    statistic="spearman",
+                    n_resamples=bootstrap_cfg.get("n_resamples", 1000),
+                    confidence=bootstrap_cfg.get("confidence_level", 0.95),
+                    seed=seed,
+                )
 
                 corr_rows.append({
                     "ablation": ablation,
                     "geval_dim": dim,
                     "human_dim": human_dim,
                     "summary_spearman": sum_corr["spearman"],
+                    "summary_spearman_ci_lo": ci_low,
+                    "summary_spearman_ci_hi": ci_high,
                     "summary_kendall": sum_corr["kendall"],
                     "summary_pearson": sum_corr["pearson"],
                     "summary_n_docs": sum_corr["n_docs"],
                     "sample_spearman": samp_corr["spearman"],
                     "sample_kendall": samp_corr["kendall"],
+                    "sample_pearson": samp_corr["pearson"],
                     "system_spearman": sys_corr["spearman"],
                     "system_kendall": sys_corr["kendall"],
+                    "system_pearson": sys_corr["pearson"],
                 })
 
     corr_df = pd.DataFrame(corr_rows)
     suffix = "_mock" if mock else ""
+    corr_df["data_label"] = "MOCK DATA" if mock else "REAL DATA"
     save_results(corr_df, results_dir / f"exp_a_correlations{suffix}.csv")
 
     # Print comparison with paper

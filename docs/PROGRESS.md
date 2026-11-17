@@ -7,10 +7,10 @@ excluded from Git; they are reproducible from the committed code and config.
 |---|---|---|---|
 | 0 | Root scaffold, config, data normalization/validation, portable Makefile, baseline tests | Complete | 62 tests pass after subsequent phases; dataset validation confirms 1,600 records, 100 documents, and 16 systems. |
 | 1 | Traditional ROUGE, BLEU, reference/source BERTScore, Exp B correlations | Complete | Full Exp B ran from the cached BERTScore results on CPU (`distilbert-base-uncased`), generated a 1,600-row metric table and 65 metric/dimension correlation rows; 95% document-bootstrap CIs use 1,000 resamples. |
-| 2 | LLM adapters, G-Eval, caching/resume, mock smoke | In progress | Focused G-Eval tests pass; full mock pipeline verification remains. |
-| 3 | Experiments A, C, E and correlation figures | In progress | Experiment code is implemented; end-to-end mock verification remains. |
-| 4 | Experiments D, F, G | In progress | Human rating export/import and analysis paths are implemented; end-to-end verification remains. |
-| 5 | Dashboard, master runner, methodology and final report | In progress | Dashboard page structure updated; startup verification and evidence-based report remain. |
+| 2 | LLM adapters, G-Eval, caching/resume, mock smoke | Complete | `run_exp_a.py --limit 20 --mock` wrote all four dimensions and three configured ablations under `results/_mock/`; no prompt files were changed. |
+| 3 | Experiments A, C, E and correlation figures | In progress | Mock correlation and ranking outputs verified; phase commit remains. |
+| 4 | Experiments D, F, G | In progress | Mock analysis outputs verified; phase commit remains. |
+| 5 | Dashboard, master runner, methodology and final report | In progress | Dashboard and report verified; phase commit remains. |
 
 ## Phase 0 Notes
 
@@ -25,3 +25,7 @@ excluded from Git; they are reproducible from the committed code and config.
 - The full traditional-metric correlation run is real dataset output (not LLM
   mock data); its CPU BERTScore implementation uses the configured fallback
   encoder. No real LLM judge run has been performed because no API key is set.
+- The final local validation ran `make test` (62 passed), repository-wide Ruff,
+  `make smoke` (complete mock pipeline), `make smoke-real` (explicit no-key
+  fallback), and Streamlit AppTest over all seven pages. No real LLM evaluation
+  was performed; see `FINAL_REPORT.md` for the evidence-based conclusion.

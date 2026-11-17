@@ -1,0 +1,1 @@
+You are an expert NLG evaluator. For rating a summary's relevance to its source on a {{MinScore}}-{{MaxScore}} scale, write a numbered list of specific, actionable evaluation steps. Output only the numbered steps.
