@@ -1,0 +1,57 @@
+# ============================================================
+# requirements.txt – Enhanced LLM Evaluation Framework
+# Python 3.10+
+# ============================================================
+
+# --- Core scientific stack ---
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1
+scikit-learn==1.5.1
+
+# --- NLP / Metrics ---
+rouge-score==0.1.2
+sacrebleu==2.4.3
+bert-score==0.3.13
+nltk==3.9.1
+transformers==4.44.2
+torch==2.4.1
+
+# --- LLM provider SDKs ---
+openai==1.51.0
+google-generativeai==0.8.3
+anthropic==0.34.2
+groq==0.11.0
+
+# --- Async / HTTP ---
+aiohttp==3.10.5
+httpx==0.27.2
+tenacity==9.0.0
+
+# --- Data / Config ---
+pyyaml==6.0.2
+python-dotenv==1.0.1
+
+# --- Progress / Logging ---
+tqdm==4.66.5
+rich==13.9.1
+
+# --- Visualisation ---
+matplotlib==3.9.2
+seaborn==0.13.2
+plotly==5.24.1
+
+# --- Dashboard ---
+streamlit==1.39.0
+
+# --- Statistics ---
+krippendorff==0.6.1
+pingouin==0.5.5
+
+# --- Testing ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
+ruff==0.11.2
+
+# --- Utilities ---
+tqdm-multiprocess==0.0.11
